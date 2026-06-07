@@ -84,7 +84,11 @@ Expand-Archive -Path $ZipPath -DestinationPath $InstallDir -Force
 Remove-Item -Path $ZipPath -Force
 
 $ExtractedExe = "$InstallDir\hermes-windows-$Arch.exe"
+$FinalExe = "$InstallDir\$BinName"
 if (Test-Path $ExtractedExe) {
+    if (Test-Path $FinalExe) {
+        Remove-Item -Path $FinalExe -Force -ErrorAction SilentlyContinue
+    }
     Rename-Item -Path $ExtractedExe -NewName $BinName -Force
 }
 

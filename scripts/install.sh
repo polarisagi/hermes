@@ -78,6 +78,7 @@ elif [ "$OS" = "darwin" ]; then
 fi
 
 mkdir -p "${INSTALL_DIR}"
+rm -f "${INSTALL_DIR}/${BIN_NAME}"
 mv -f /tmp/${BIN_NAME}-${OS}-${ARCH} "${INSTALL_DIR}/${BIN_NAME}"
 
 print_msg "✅ 二进制文件已安装至: ${INSTALL_DIR}/${BIN_NAME}" "✅ Binary installed to: ${INSTALL_DIR}/${BIN_NAME}"

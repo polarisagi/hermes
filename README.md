@@ -81,6 +81,11 @@ All configurations, billing records, and SQLite databases (`polarisagi_hermes.db
 # Recommended (Includes smart network fallback)
 curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
 
+# Mainland China Fallback 1 (ghfast mirror)
+curl -sSL https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
+
+# Mainland China Fallback 2 (ghproxy mirror)
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
 ```
 
 **Windows:**
@@ -88,6 +93,11 @@ curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/insta
 # Recommended (Includes smart network fallback)
 irm https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
 
+# Mainland China Fallback 1 (ghfast mirror)
+irm https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
+
+# Mainland China Fallback 2 (ghproxy mirror)
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
 ```
 *The gateway will run as a background service and auto-start on user logon.*
 
@@ -126,12 +136,22 @@ TEST_MODE=true go run ./cmd/hermes
 # Default
 curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
 
+# Mainland China Fallback 1 (ghfast mirror)
+curl -sSL https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
+
+# Mainland China Fallback 2 (ghproxy mirror)
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
 ```
 **Windows:**
 ```powershell
 # Default
 irm https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
 
+# Mainland China Fallback 1 (ghfast mirror)
+irm https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
+
+# Mainland China Fallback 2 (ghproxy mirror)
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
 ```
 > **Note**: Uninstalling only removes the service and binary. Data remains safely in `~/.polarisagi/hermes/`. Delete it manually if you want a complete wipe.
 

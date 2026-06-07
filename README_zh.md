@@ -81,6 +81,11 @@
 # 推荐命令（已包含智能网络降级下载）
 curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
 
+# 中国大陆地区备用命令 1 (ghfast 镜像)
+curl -sSL https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
+
+# 中国大陆地区备用命令 2 (ghproxy 镜像)
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.sh | bash
 ```
 
 **Windows:**
@@ -88,6 +93,11 @@ curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/insta
 # 推荐命令（已包含智能网络降级下载）
 irm https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
 
+# 中国大陆地区备用命令 1 (ghfast 镜像)
+irm https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
+
+# 中国大陆地区备用命令 2 (ghproxy 镜像)
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/install.ps1 | iex
 ```
 *安装完成后，PolarisAGI-Hermes 将作为后台服务自动运行，并在每次用户登录时自启。*
 
@@ -126,12 +136,22 @@ TEST_MODE=true go run ./cmd/hermes
 # 默认
 curl -sSL https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
 
+# 中国大陆地区备用命令 1 (ghfast 镜像)
+curl -sSL https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
+
+# 中国大陆地区备用命令 2 (ghproxy 镜像)
+curl -sSL https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.sh | bash
 ```
 **Windows:**
 ```powershell
 # 默认
 irm https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
 
+# 中国大陆地区备用命令 1 (ghfast 镜像)
+irm https://ghfast.top/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
+
+# 中国大陆地区备用命令 2 (ghproxy 镜像)
+irm https://mirror.ghproxy.com/https://raw.githubusercontent.com/polarisagi/hermes/main/scripts/uninstall.ps1 | iex
 ```
 > **注意**: 卸载只移除服务和二进制，数据保留在 `~/.polarisagi/hermes/`，如需彻底清理请手动删除。
 
