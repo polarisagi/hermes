@@ -9,7 +9,6 @@
 /polarisagi
 /hermes
 tmp_bin/
-docs/superpowers/
 *.md
 !README.md
 !README_zh.md
@@ -19,6 +18,9 @@ docs/superpowers/
 !CHANGELOG.md
 !SECURITY.md
 !.github/**/*.md
+!CLAUDE.md
+!AGENTS.md
+!docs/**/*.md
 
 # Sisyphus
 .sisyphus/
@@ -36,4 +38,3 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .eslintcache
-hermes
