@@ -278,7 +278,7 @@ export default {
                                         <!-- Restore button -->
                                         <button
                                             @click="restoreConfig(client.name)"
-                                            :disabled="!client.has_backup || restoringClient === client.name"
+                                            :disabled="(!client.has_backup && !client.is_configured) || restoringClient === client.name"
                                             class="btn btn-sm btn-warning btn-outline gap-2">
                                             <template x-if="restoringClient === client.name">
                                                 <span class="loading loading-spinner loading-xs"></span>

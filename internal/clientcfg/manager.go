@@ -25,7 +25,8 @@ type clientDef struct {
 	getInstallDir  func(home string) string
 	getConfigPath  func(home string) string
 	applyFn        func(home, listenAddr string) error
-	isApplied      func(home string) bool
+	isApplied      func(home, listenAddr string) bool
+	cleanFn        func(home, listenAddr string) error
 	getInjectedURL func(listenAddr string) string
 }
 
@@ -42,12 +43,33 @@ var allClients = []clientDef{
 			// 采用 openai_base_url 覆盖方案，无需再注入 auth.json 或自定义 provider
 			return applyCodexTOML(filepath.Join(home, ".codex/config.toml"), listenAddr)
 		},
-		isApplied: func(home string) bool {
+		isApplied: func(home, listenAddr string) bool {
 			data, err := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
 			if err != nil {
 				return false
 			}
-			return strings.Contains(string(data), `openai_base_url = "http://`)
+			expectedURL := fmt.Sprintf(`openai_base_url = "http://%s/v1/openai"`, listenAddr)
+			return strings.Contains(string(data), expectedURL)
+		},
+		cleanFn: func(home, listenAddr string) error {
+			path := filepath.Join(home, ".codex/config.toml")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) { return nil }
+				return err
+			}
+			lines := strings.Split(string(data), "\n")
+			filtered := make([]string, 0, len(lines))
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "openai_base_url") {
+					if strings.Contains(line, listenAddr) {
+						continue
+					}
+				}
+				filtered = append(filtered, line)
+			}
+			return atomicWriteFile(path, []byte(strings.Join(filtered, "\n")), 0644)
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/openai" },
 	},
@@ -68,8 +90,39 @@ var allClients = []clientDef{
 				},
 			)
 		},
-		isApplied: func(home string) bool {
-			return isJSONConfigured(filepath.Join(home, ".claude/settings.json"), "primaryApiKey")
+		isApplied: func(home, listenAddr string) bool {
+			expectedURL := "http://" + listenAddr + "/v1/anthropic"
+			path := filepath.Join(home, ".claude/settings.json")
+			return isJSONConfiguredValue(path, "env.ANTHROPIC_BASE_URL", expectedURL)
+		},
+		cleanFn: func(home, listenAddr string) error {
+			path := filepath.Join(home, ".claude/settings.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) { return nil }
+				return err
+			}
+			var obj map[string]any
+			if err := json.Unmarshal(data, &obj); err != nil {
+				return err
+			}
+			if key, ok := obj["primaryApiKey"].(string); ok && key == polarisAPIKey {
+				delete(obj, "primaryApiKey")
+			}
+			if env, ok := obj["env"].(map[string]any); ok {
+				expectedURL := "http://" + listenAddr + "/v1/anthropic"
+				if url, ok := env["ANTHROPIC_BASE_URL"].(string); ok && url == expectedURL {
+					delete(env, "ANTHROPIC_BASE_URL")
+				}
+				if key, ok := env["ANTHROPIC_AUTH_TOKEN"].(string); ok && key == polarisAPIKey {
+					delete(env, "ANTHROPIC_AUTH_TOKEN")
+				}
+				if key, ok := env["ANTHROPIC_API_KEY"].(string); ok && key == polarisAPIKey {
+					delete(env, "ANTHROPIC_API_KEY")
+				}
+			}
+			out, _ := json.MarshalIndent(obj, "", "  ")
+			return atomicWriteFile(path, out, 0644)
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/anthropic" },
 	},
@@ -173,17 +226,12 @@ var allClients = []clientDef{
 			}
 			return atomicWriteFile(metaPath, metaOut, 0644)
 		},
-		isApplied: func(home string) bool {
+		isApplied: func(home, listenAddr string) bool {
 			dir, err := os.UserConfigDir()
 			base := filepath.Join(home, "Library", "Application Support")
 			if err == nil {
 				base = dir
 			}
-			polarisConfigPath := filepath.Join(base, "Claude-3p", "configLibrary", "polarisagi.json")
-			if _, err := os.Stat(polarisConfigPath); os.IsNotExist(err) {
-				return false
-			}
-
 			metaPath := filepath.Join(base, "Claude-3p", "configLibrary", "_meta.json")
 			data, err := os.ReadFile(metaPath)
 			if err != nil {
@@ -195,6 +243,40 @@ var allClients = []clientDef{
 			}
 			appliedId, _ := meta["appliedId"].(string)
 			return appliedId == "polarisagi"
+		},
+		cleanFn: func(home, listenAddr string) error {
+			dir, err := os.UserConfigDir()
+			base := filepath.Join(home, "Library", "Application Support")
+			if err == nil {
+				base = dir
+			}
+			polarisConfigPath := filepath.Join(base, "Claude-3p", "configLibrary", "polarisagi.json")
+			_ = os.Remove(polarisConfigPath)
+			
+			metaPath := filepath.Join(base, "Claude-3p", "configLibrary", "_meta.json")
+			data, err := os.ReadFile(metaPath)
+			if err == nil {
+				var meta map[string]any
+				if err := json.Unmarshal(data, &meta); err == nil {
+					if meta["appliedId"] == "polarisagi" {
+						delete(meta, "appliedId")
+					}
+					var newEntries []any
+					if entries, ok := meta["entries"].([]any); ok {
+						for _, e := range entries {
+							if eMap, ok := e.(map[string]any); ok {
+								if eMap["id"] != "polarisagi" {
+									newEntries = append(newEntries, e)
+								}
+							}
+						}
+					}
+					meta["entries"] = newEntries
+					out, _ := json.MarshalIndent(meta, "", "  ")
+					_ = atomicWriteFile(metaPath, out, 0644)
+				}
+			}
+			return nil
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/anthropic" },
 	},
@@ -225,11 +307,47 @@ var allClients = []clientDef{
 				},
 			)
 		},
-		isApplied: func(home string) bool {
-			return isJSONConfigured(
-				filepath.Join(home, ".config/opencode/opencode.json"),
-				"provider.google-vertex.options.apiKey",
-			)
+		isApplied: func(home, listenAddr string) bool {
+			expectedURL := "http://" + listenAddr + "/v1/google"
+			path := filepath.Join(home, ".config/opencode/opencode.json")
+			return isJSONConfiguredValue(path, "provider.google-vertex.options.baseURL", expectedURL) || 
+			       isJSONConfiguredValue(path, "provider.vertex.options.baseURL", expectedURL)
+		},
+		cleanFn: func(home, listenAddr string) error {
+			path := filepath.Join(home, ".config/opencode/opencode.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) { return nil }
+				return err
+			}
+			var obj map[string]any
+			if err := json.Unmarshal(data, &obj); err != nil {
+				return err
+			}
+			providers, ok := obj["provider"].(map[string]any)
+			if !ok {
+				return nil
+			}
+			
+			expectedURL := "http://" + listenAddr + "/v1/google"
+			
+			if entry, ok := providers["google-vertex"].(map[string]any); ok {
+				if opts, ok := entry["options"].(map[string]any); ok {
+					if url, ok := opts["baseURL"].(string); ok && url == expectedURL {
+						delete(providers, "google-vertex")
+					}
+				}
+			}
+			if entry, ok := providers["vertex"].(map[string]any); ok {
+				if opts, ok := entry["options"].(map[string]any); ok {
+					if url, ok := opts["baseURL"].(string); ok && url == expectedURL {
+						delete(providers, "vertex")
+					}
+				}
+			}
+			
+			out, _ := json.MarshalIndent(obj, "", "  ")
+			return atomicWriteFile(path, out, 0644)
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/google" },
 	},
@@ -247,8 +365,43 @@ var allClients = []clientDef{
 				listenAddr,
 			)
 		},
-		isApplied: func(home string) bool {
-			return isEnvConfigured(filepath.Join(home, ".gemini/.env"), "GEMINI_API_KEY")
+		isApplied: func(home, listenAddr string) bool {
+			expectedURL := "http://" + listenAddr + "/v1/google"
+			path := filepath.Join(home, ".gemini/.env")
+			return isEnvConfiguredValue(path, "GOOGLE_GEMINI_BASE_URL", expectedURL)
+		},
+		cleanFn: func(home, listenAddr string) error {
+			path := filepath.Join(home, ".gemini/.env")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) { return nil }
+				return err
+			}
+			lines := strings.Split(string(data), "\n")
+			filtered := make([]string, 0, len(lines))
+			skipBlock := false
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.Contains(trimmed, "PolarisAGI-Hermes Proxy Config") {
+					skipBlock = true
+					continue
+				}
+				if strings.Contains(trimmed, "End PolarisAGI-Hermes") {
+					skipBlock = false
+					continue
+				}
+				if skipBlock {
+					continue
+				}
+				if strings.HasPrefix(trimmed, "GOOGLE_GEMINI_BASE_URL=") && strings.Contains(trimmed, listenAddr) {
+					continue
+				}
+				if strings.HasPrefix(trimmed, "GEMINI_API_KEY=") && strings.Contains(trimmed, polarisAPIKey) {
+					continue
+				}
+				filtered = append(filtered, line)
+			}
+			return atomicWriteFile(path, []byte(strings.Join(filtered, "\n")), 0644)
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/google" },
 	},
@@ -276,14 +429,19 @@ func (m *Manager) GetAllStatuses(ctx context.Context) ([]domain.ClientStatus, er
 		backups = make(map[string]*store.ClientBackupRecord)
 	}
 
+	listenAddr, _ := m.settingsRepo.GetSetting(ctx, "listen_addr")
+	if listenAddr == "" {
+		listenAddr = config.GlobalConfig.Server.ListenAddr
+	}
+
 	statuses := make([]domain.ClientStatus, 0, len(allClients))
 	for _, def := range allClients {
-		statuses = append(statuses, m.detectStatus(home, def, backups))
+		statuses = append(statuses, m.detectStatus(home, listenAddr, def, backups))
 	}
 	return statuses, nil
 }
 
-func (m *Manager) detectStatus(home string, def clientDef, backups map[string]*store.ClientBackupRecord) domain.ClientStatus {
+func (m *Manager) detectStatus(home, listenAddr string, def clientDef, backups map[string]*store.ClientBackupRecord) domain.ClientStatus {
 	st := domain.ClientStatus{
 		Name: def.Name,
 	}
@@ -294,10 +452,28 @@ func (m *Manager) detectStatus(home string, def clientDef, backups map[string]*s
 	if _, err := os.Stat(installDir); err == nil {
 		st.IsInstalled = true
 	}
-	st.IsConfigured = def.isApplied(home)
+	st.IsConfigured = def.isApplied(home, listenAddr)
+
+	backupPath := ""
+	if def.ConfigRelPath != "" {
+		backupPath = filepath.Join(home, def.ConfigRelPath) + ".polarisagi_backup"
+	}
+	if def.getConfigPath != nil {
+		backupPath = def.getConfigPath(home) + ".polarisagi_backup"
+	}
+	
+	hasPhysicalBackup := false
+	if backupPath != "" {
+		if _, err := os.Stat(backupPath); err == nil {
+			hasPhysicalBackup = true
+		}
+	}
+
 	if rec, ok := backups[def.Name]; ok {
 		st.HasBackup = true
 		st.InjectedURL = rec.InjectedURL
+	} else if hasPhysicalBackup {
+		st.HasBackup = true
 	}
 	return st
 }
@@ -356,38 +532,18 @@ func (m *Manager) RestoreConfig(ctx context.Context, clientName string) error {
 
 	rec, dbErr := m.backupRepo.Get(ctx, clientName)
 	var hasDBRecord bool
-	var originalContent string
-	var hasOriginalContent bool
 
 	if dbErr == nil && rec != nil {
 		hasDBRecord = true
-		if rec.OriginalContent != "" {
-			originalContent = rec.OriginalContent
-			hasOriginalContent = true
-		}
 	}
 
-	// 如果数据库中没有记录或者内容为空，尝试使用本地备份文件恢复
-	if !hasOriginalContent {
-		if data, readErr := os.ReadFile(backupPath); readErr == nil {
-			originalContent = string(data)
-			hasOriginalContent = true
-			slog.Info("数据库中未找到原始配置或读取失败，使用本地备份文件进行恢复", "client", def.Name)
-		} else {
-			if !hasDBRecord {
-				return fmt.Errorf("未找到客户端 %s 的备份数据（数据库和本地文件均不存在）", def.Name)
-			}
-		}
+	listenAddr, _ := m.settingsRepo.GetSetting(ctx, "listen_addr")
+	if listenAddr == "" {
+		listenAddr = config.GlobalConfig.Server.ListenAddr
 	}
 
-	if !hasOriginalContent {
-		if removeErr := os.Remove(configPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("删除注入的配置文件失败: %w", removeErr)
-		}
-	} else {
-		if writeErr := atomicWriteFile(configPath, []byte(originalContent), 0644); writeErr != nil {
-			return fmt.Errorf("恢复配置文件失败: %w", writeErr)
-		}
+	if err := def.cleanFn(home, listenAddr); err != nil {
+		slog.Warn("执行配置精准清理失败", "client", def.Name, "error", err)
 	}
 
 	if hasDBRecord {
@@ -399,7 +555,7 @@ func (m *Manager) RestoreConfig(ctx context.Context, clientName string) error {
 	// 尝试清理物理备份文件（如果存在）
 	_ = os.Remove(backupPath)
 
-	slog.Info("客户端配置已恢复原始状态", "client", def.Name)
+	slog.Info("客户端配置已恢复原始状态 (精准清理)", "client", def.Name)
 	return nil
 }
 
@@ -520,7 +676,7 @@ func applyEnvConfig(path string, keys []envKeyDef, listenAddr string) error {
 	return atomicWriteFile(path, []byte(strings.Join(filtered, "\n")+"\n"), 0644)
 }
 
-func isEnvConfigured(path, signatureKey string) bool {
+func isEnvConfiguredValue(path, signatureKey, expectedValue string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -530,7 +686,7 @@ func isEnvConfigured(path, signatureKey string) bool {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, signatureKey+"=") {
 			val := strings.TrimPrefix(line, signatureKey+"=")
-			return strings.Contains(strings.ToLower(val), polarisMarker)
+			return strings.Contains(strings.ToLower(val), strings.ToLower(expectedValue))
 		}
 	}
 	return false
@@ -549,8 +705,6 @@ func applyJSONConfig(path string, patch map[string]any) error {
 	return atomicWriteFile(path, out, 0644)
 }
 
-// removeStaleProviderEntry 删除 provider.<key> 节点（仅当其 options.apiKey 带有 polarisMarker 标记时），
-// 用于清理本程序历史版本误注入、且现已改名/废弃的自定义 provider 条目，避免误删用户自行配置的同名 provider。
 func removeStaleProviderEntry(path, providerKey string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -581,7 +735,7 @@ func removeStaleProviderEntry(path, providerKey string) {
 	_ = atomicWriteFile(path, out, 0644)
 }
 
-func isJSONConfigured(path, jsonPath string) bool {
+func isJSONConfiguredValue(path, jsonPath, expectedValue string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -591,7 +745,7 @@ func isJSONConfigured(path, jsonPath string) bool {
 		return false
 	}
 	val, _ := getJSONPath(obj, jsonPath).(string)
-	return strings.Contains(strings.ToLower(val), polarisMarker)
+	return strings.Contains(strings.ToLower(val), strings.ToLower(expectedValue))
 }
 
 func deepMerge(base, patch map[string]any) map[string]any {
