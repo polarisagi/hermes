@@ -1,0 +1,243 @@
+package togoogle
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	gcommon "github.com/polarisagi/hermes/internal/translate/google"
+)
+
+// mapMessages 转换历史对话
+func mapMessages(messages []Message, model string) ([]map[string]interface{}, error) {
+	if lastIdx := findLastCompactionIndex(messages); lastIdx >= 0 {
+		messages = messages[lastIdx:]
+	}
+
+	toolMap := make(map[string]string)
+	flattenedTools := make(map[string]bool)
+	buildToolMap(messages, toolMap)
+
+	var contents []map[string]interface{}
+	for _, msg := range messages {
+		role := "user"
+		if msg.Role == "assistant" {
+			role = "model"
+		}
+
+		var lastSignature string
+		var parts []map[string]interface{}
+
+		switch v := msg.Content.(type) {
+		case string:
+			parts = append(parts, map[string]interface{}{"text": v})
+		case []interface{}:
+			for _, item := range v {
+				if m, ok := item.(map[string]interface{}); ok {
+					switch m["type"] {
+					case "text":
+						textPart := map[string]interface{}{"text": m["text"]}
+						if lastSignature != "" {
+							textPart["thoughtSignature"] = lastSignature
+							lastSignature = ""
+						}
+						parts = append(parts, textPart)
+					case "thinking":
+						if sig, _ := m["signature"].(string); sig != "" {
+							lastSignature = sig
+						}
+						continue
+					case "compaction":
+						if content, ok := m["content"].(string); ok && content != "" {
+							parts = append(parts, map[string]interface{}{"text": content})
+						}
+					case "redacted_thinking":
+						continue
+					case "image", "audio", "video", "media":
+						if source, ok := m["source"].(map[string]interface{}); ok {
+							if part := convertMediaSourceToVertexPart(source, ""); part != nil {
+								parts = append(parts, part)
+							}
+						}
+					case "document":
+						if source, ok := m["source"].(map[string]interface{}); ok {
+							if part := convertMediaSourceToVertexPart(source, "application/pdf"); part != nil {
+								parts = append(parts, part)
+							}
+						}
+					case "tool_use":
+						parsedParts := parseToolUseBlock(m, model, lastSignature, flattenedTools)
+						parts = append(parts, parsedParts...)
+					case "tool_result":
+						parts = append(parts, parseToolResultBlock(m, toolMap, flattenedTools)...)
+					}
+				}
+			}
+		}
+
+		if len(parts) == 0 {
+			parts = append(parts, map[string]interface{}{"text": ""})
+		}
+
+		contents = append(contents, map[string]interface{}{
+			"role":  role,
+			"parts": parts,
+		})
+	}
+
+	return enforceAlternatingRoles(contents), nil
+}
+
+func buildToolMap(messages []Message, toolMap map[string]string) {
+	for _, msg := range messages {
+		if arr, ok := msg.Content.([]interface{}); ok {
+			for _, item := range arr {
+				if m, ok := item.(map[string]interface{}); ok {
+					if m["type"] == "tool_use" {
+						if id, ok := m["id"].(string); ok {
+							if name, ok := m["name"].(string); ok {
+								toolMap[id] = name
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func parseToolUseBlock(m map[string]interface{}, model, lastSignature string, flattenedTools map[string]bool) []map[string]interface{} {
+	fc := map[string]interface{}{
+		"name": m["name"],
+		"args": m["input"],
+	}
+	partObj := map[string]interface{}{
+		"functionCall": fc,
+	}
+
+	var thoughtSig string
+	if id, ok := m["id"].(string); ok && id != "" {
+		if sig, ok := toolThoughtSigCache.Load(id); ok {
+			thoughtSig = sig.(string)
+		} else if idx := strings.Index(id, "_sig_"); idx != -1 {
+			thoughtSig = id[idx+5:]
+		}
+	}
+
+	if thoughtSig == "" && lastSignature != "" {
+		thoughtSig = lastSignature
+	}
+
+	if thoughtSig == "" && gcommon.IsGemini3Model(model) {
+		argsBytes, _ := json.Marshal(m["input"])
+		textPart := fmt.Sprintf("<past_tool_execution name=\"%s\">\n%s\n</past_tool_execution>", m["name"], string(argsBytes))
+		if id, ok := m["id"].(string); ok {
+			flattenedTools[id] = true
+		}
+		return []map[string]interface{}{{"text": textPart}}
+	}
+
+	if thoughtSig != "" {
+		partObj["thoughtSignature"] = thoughtSig
+	}
+
+	return []map[string]interface{}{partObj}
+}
+
+func parseToolResultBlock(m map[string]interface{}, toolMap map[string]string, flattenedTools map[string]bool) []map[string]interface{} {
+	toolUseID, _ := m["tool_use_id"].(string)
+	name := toolMap[toolUseID]
+	if name == "" {
+		name = "unknown_function"
+	}
+
+	isError, _ := m["is_error"].(bool)
+	var parts []map[string]interface{}
+	var respContent map[string]interface{}
+
+	if contentStr, ok := m["content"].(string); ok {
+		if isError {
+			contentStr = fmt.Sprintf("Error: %s", contentStr)
+		}
+		respContent = map[string]interface{}{"content": contentStr}
+	} else if contentArr, ok := m["content"].([]interface{}); ok {
+		var textContents []string
+		for _, cItem := range contentArr {
+			if cMap, ok := cItem.(map[string]interface{}); ok {
+				if cMap["type"] == "text" {
+					if textStr, ok := cMap["text"].(string); ok {
+						textContents = append(textContents, textStr)
+					}
+				} else if t, ok := cMap["type"].(string); ok && (t == "image" || t == "document" || t == "audio" || t == "video" || t == "media") {
+					if source, ok := cMap["source"].(map[string]interface{}); ok {
+						if part := convertMediaSourceToVertexPart(source, ""); part != nil {
+							parts = append(parts, part)
+						}
+					}
+				}
+			}
+		}
+
+		combinedText := strings.Join(textContents, "\n")
+		if isError {
+			combinedText = fmt.Sprintf("Error: %s", combinedText)
+		}
+		respContent = map[string]interface{}{"content": combinedText}
+	} else {
+		rawBytes, _ := json.Marshal(m["content"])
+		contentStr := string(rawBytes)
+		if isError {
+			contentStr = fmt.Sprintf("Error: %s", contentStr)
+		}
+		respContent = map[string]interface{}{"content": contentStr}
+	}
+
+	if flattenedTools[toolUseID] {
+		textPart := fmt.Sprintf("<past_tool_result name=\"%s\">\n%s\n</past_tool_result>", name, respContent["content"])
+		parts = append(parts, map[string]interface{}{"text": textPart})
+	} else {
+		parts = append(parts, map[string]interface{}{
+			"functionResponse": map[string]interface{}{
+				"name":     name,
+				"response": respContent,
+			},
+		})
+	}
+	return parts
+}
+
+func enforceAlternatingRoles(contents []map[string]interface{}) []map[string]interface{} {
+	if len(contents) > 1 {
+		merged := []map[string]interface{}{contents[0]}
+		for i := 1; i < len(contents); i++ {
+			last := merged[len(merged)-1]
+			curr := contents[i]
+			if last["role"] == curr["role"] {
+				lastParts, _ := last["parts"].([]map[string]interface{})
+				currParts, _ := curr["parts"].([]map[string]interface{})
+				last["parts"] = append(lastParts, currParts...)
+			} else {
+				merged = append(merged, curr)
+			}
+		}
+		contents = merged
+	}
+
+	if len(contents) > 0 {
+		if contents[0]["role"] == "model" {
+			contents = append([]map[string]interface{}{
+				{"role": "user", "parts": []map[string]interface{}{{"text": ""}}},
+			}, contents...)
+		}
+	}
+
+	if len(contents) > 0 {
+		if contents[len(contents)-1]["role"] == "model" {
+			contents = append(contents, map[string]interface{}{
+				"role":  "user",
+				"parts": []map[string]interface{}{{"text": "Please continue."}},
+			})
+		}
+	}
+	return contents
+}

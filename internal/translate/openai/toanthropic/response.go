@@ -1,0 +1,266 @@
+package toanthropic
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// ── 非流式响应处理 ─────────────────────────────────────────────────────────────
+
+func handleNonStream(w http.ResponseWriter, resp *http.Response, model string) {
+	body, _ := io.ReadAll(resp.Body)
+	var aResp map[string]interface{}
+	_ = json.Unmarshal(body, &aResp)
+
+	id, _ := aResp["id"].(string)
+	if id == "" {
+		id = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+	}
+	// 从 Anthropic 响应中提取实际模型名
+	if m, ok := aResp["model"].(string); ok && m != "" {
+		model = m
+	}
+
+	var textParts []string
+	var reasoningParts []string
+	var toolCalls []map[string]interface{}
+
+	if content, ok := aResp["content"].([]interface{}); ok {
+		for _, bRaw := range content {
+			b, ok := bRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch b["type"] {
+			case "text":
+				if text, ok := b["text"].(string); ok {
+					textParts = append(textParts, text)
+				}
+			case "thinking":
+				if text, ok := b["thinking"].(string); ok {
+					reasoningParts = append(reasoningParts, text)
+				}
+			case "tool_use":
+				tcID, _ := b["id"].(string)
+				name, _ := b["name"].(string)
+				inputBytes, _ := json.Marshal(b["input"])
+				toolCalls = append(toolCalls, map[string]interface{}{
+					"id":   tcID,
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":      name,
+						"arguments": string(inputBytes),
+					},
+				})
+			}
+		}
+	}
+
+	finishReason := "stop"
+	if sr, ok := aResp["stop_reason"].(string); ok {
+		switch sr {
+		case "max_tokens":
+			finishReason = "length"
+		case "tool_use":
+			finishReason = "tool_calls"
+		}
+	}
+
+	var inTokens, outTokens int
+	if usage, ok := aResp["usage"].(map[string]interface{}); ok {
+		if it, ok := usage["input_tokens"].(float64); ok {
+			inTokens = int(it)
+		}
+		if ot, ok := usage["output_tokens"].(float64); ok {
+			outTokens = int(ot)
+		}
+	}
+
+	msg := map[string]interface{}{
+		"role":    "assistant",
+		"content": strings.Join(textParts, "\n"),
+	}
+	if len(reasoningParts) > 0 {
+		msg["reasoning_content"] = strings.Join(reasoningParts, "\n")
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+		if len(textParts) == 0 {
+			msg["content"] = nil
+		}
+	}
+
+	oResp := map[string]interface{}{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"message":       msg,
+				"finish_reason": finishReason,
+			},
+		},
+		"usage": map[string]int{
+			"prompt_tokens":     inTokens,
+			"completion_tokens": outTokens,
+			"total_tokens":      inTokens + outTokens,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(oResp)
+}
+
+// ── 流式响应处理 ───────────────────────────────────────────────────────────────
+
+func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, _ := w.(http.Flusher)
+	reader := bufio.NewReader(resp.Body)
+	created := time.Now().Unix()
+
+	var msgID string
+	var currentToolIndex int = -1
+
+	writeChunk := func(data interface{}) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if dataStr == "[DONE]" || dataStr == "" {
+			continue
+		}
+
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
+			continue
+		}
+
+		eventType, _ := event["type"].(string)
+		switch eventType {
+		case "message_start":
+			if msg, ok := event["message"].(map[string]interface{}); ok {
+				if id, ok := msg["id"].(string); ok && id != "" {
+					msgID = id
+				}
+				// 从 Anthropic 流式响应提取实际模型名
+				if m, ok := msg["model"].(string); ok && m != "" {
+					model = m
+				}
+				writeChunk(map[string]interface{}{
+					"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+					"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"role": "assistant"}}},
+				})
+			}
+
+		case "content_block_start":
+			if block, ok := event["content_block"].(map[string]interface{}); ok {
+				if block["type"] == "tool_use" {
+					currentToolIndex++
+					id, _ := block["id"].(string)
+					name, _ := block["name"].(string)
+					writeChunk(map[string]interface{}{
+						"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+						"choices": []map[string]interface{}{
+							{
+								"index": 0,
+								"delta": map[string]interface{}{
+									"tool_calls": []map[string]interface{}{
+										{
+											"index": currentToolIndex,
+											"id":    id, "type": "function",
+											"function": map[string]interface{}{"name": name, "arguments": ""},
+										},
+									},
+								},
+							},
+						},
+					})
+				}
+			}
+
+		case "content_block_delta":
+			if delta, ok := event["delta"].(map[string]interface{}); ok {
+				deltaType, _ := delta["type"].(string)
+				switch deltaType {
+				case "text_delta":
+					text, _ := delta["text"].(string)
+					writeChunk(map[string]interface{}{
+						"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+						"choices": []map[string]interface{}{{"index": 0, "delta": map[string]string{"content": text}}},
+					})
+				case "thinking_delta":
+					// Anthropic 思考内容 → reasoning_content（与 DeepSeek/Gemini 流式格式对齐）
+					thinking, _ := delta["thinking"].(string)
+					writeChunk(map[string]interface{}{
+						"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+						"choices": []map[string]interface{}{{"index": 0, "delta": map[string]interface{}{"reasoning_content": thinking}}},
+					})
+				case "input_json_delta":
+					jsonStr, _ := delta["partial_json"].(string)
+					writeChunk(map[string]interface{}{
+						"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+						"choices": []map[string]interface{}{
+							{
+								"index": 0,
+								"delta": map[string]interface{}{
+									"tool_calls": []map[string]interface{}{
+										{
+											"index":    currentToolIndex,
+											"function": map[string]interface{}{"arguments": jsonStr},
+										},
+									},
+								},
+							},
+						},
+					})
+				}
+			}
+
+		case "message_delta":
+			if delta, ok := event["delta"].(map[string]interface{}); ok {
+				if stopReason, ok := delta["stop_reason"].(string); ok && stopReason != "" {
+					reason := "stop"
+					switch stopReason {
+					case "max_tokens":
+						reason = "length"
+					case "tool_use":
+						reason = "tool_calls"
+					}
+					writeChunk(map[string]interface{}{
+						"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+						"choices": []map[string]interface{}{{"index": 0, "delta": map[string]interface{}{}, "finish_reason": reason}},
+					})
+				}
+			}
+		}
+	}
+
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}

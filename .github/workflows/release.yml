@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '>=1.26.0'
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        VERSION=${VERSION//[^a-zA-Z0-9._+-]/}
+        LDFLAGS="-s -w -X 'github.com/polarisagi/hermes/internal/app.Version=${VERSION}' -X 'github.com/polarisagi/hermes/internal/api.Version=${VERSION}'"
+
+        BINARY_NAME=hermes
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          BINARY_NAME=hermes-windows-${{ matrix.goarch }}.exe
+          LDFLAGS="${LDFLAGS} -H=windowsgui"
+          go build -ldflags="${LDFLAGS}" -o $BINARY_NAME ./cmd/hermes
+          zip hermes-windows-${{ matrix.goarch }}.zip $BINARY_NAME
+          rm $BINARY_NAME
+        else
+          BINARY_NAME=hermes-${{ matrix.goos }}-${{ matrix.goarch }}
+          go build -ldflags="${LDFLAGS}" -o $BINARY_NAME ./cmd/hermes
+          tar -czvf hermes-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz $BINARY_NAME
+          rm $BINARY_NAME
+        fi
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: hermes-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: hermes-*
+        retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

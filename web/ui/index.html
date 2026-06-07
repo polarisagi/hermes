@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN" x-data :data-theme="$store.global.theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : $store.global.theme">
+<head>
+    <meta charset="UTF-8">
+    <title>PolarisAGI Hermes Admin Panel</title>
+    <!-- Favicon (Inline SVG to prevent 404) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌟</text></svg>">
+    <!-- DaisyUI + Tailwind -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.10.1/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <link href="/tailwind.css" rel="stylesheet">
+    
+    <!-- Alpine JS (Moved to end of body to ensure app.js module runs first) -->
+    
+    <!-- i18n messages -->
+    <script src="i18n.js?v=3"></script>
+    
+    <!-- Alpine Store -->
+    <script src="store.js?v=3"></script>
+    
+    <!-- Flatpickr -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/zh.js"></script>
+    
+    <script>
+        // Set initial theme setup script (before Alpine loads)
+        window.getSystemTheme = () => localStorage.getItem('polarisagi_theme') || 'system';
+        window.applyTheme = (theme) => {
+            localStorage.setItem('polarisagi_theme', theme);
+            if (theme === 'system') {
+                const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+            } else {
+                document.documentElement.setAttribute('data-theme', theme);
+            }
+        };
+        window.getSystemLanguage = () => localStorage.getItem('polarisagi_lang') || 'zh';
+        window.setSystemLanguage = (l) => localStorage.setItem('polarisagi_lang', l);
+    </script>
+</head>
+
+<body class="flex h-screen overflow-hidden bg-base-200" x-init="
+    fetch('/api/admin/info')
+        .then(r => r.json())
+        .then(d => {
+            $store.global.version = d.version;
+            $store.global.debugEnabled = d.debug;
+            $store.global.checkForUpdates(d.version);
+        })
+        .catch(e => console.error(e));
+">
+    <!-- Toast Notification -->
+    <div class="toast toast-top toast-end z-[200]" x-show="$store.global.toast.show" x-transition>
+        <div class="alert shadow-lg" :class="$store.global.toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="$store.global.toast.message"></span>
+        </div>
+    </div>
+
+    <!-- Sidebar Layout using DaisyUI Drawer/Menu -->
+    <div class="drawer lg:drawer-open">
+        <input id="my-drawer-2" type="checkbox" class="drawer-toggle" />
+        
+        <!-- Main Content -->
+        <div class="drawer-content flex flex-col p-8 relative h-screen overflow-auto">
+            <!-- Mobile drawer toggle -->
+            <label for="my-drawer-2" class="btn btn-primary drawer-button lg:hidden mb-4">☰ Menu</label>
+            
+            <!-- Dynamic Components Container -->
+            <div id="components-container"></div>
+            
+        </div> 
+        
+        <!-- Sidebar -->
+        <div class="drawer-side">
+            <label for="my-drawer-2" aria-label="close sidebar" class="drawer-overlay"></label> 
+            <div class="menu w-64 min-h-full bg-base-100 text-base-content border-r border-base-300 flex flex-col pt-6">
+                <!-- Branding -->
+                <div class="px-6 mb-4">
+                    <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-success">
+                        PolarisAGI Hermes
+                    </h1>
+                    <p class="text-xs mt-1 uppercase tracking-wider opacity-60">
+                        <span x-text="$store.global.t('app_subtitle')"></span>
+                        <span x-show="$store.global.version" class="ml-2 lowercase font-mono" x-text="$store.global.version"></span>
+                    </p>
+                    
+                    <!-- Update Button -->
+                    <button class="btn btn-success btn-sm w-full mt-4" 
+                            x-show="$store.global.updateAvailable" 
+                            @click="$store.global.triggerUpdate()"
+                            :disabled="$store.global.isUpdating">
+                        <span x-show="!$store.global.isUpdating" x-text="$store.global.t('new_version_found') + ' ' + $store.global.latestVersion"></span>
+                        <span x-show="$store.global.isUpdating" class="loading loading-spinner loading-xs"></span>
+                        <span x-show="$store.global.isUpdating" x-text="$store.global.t('updating')"></span>
+                    </button>
+                </div>
+                
+                <!-- Nav Links -->
+                <ul class="menu w-full px-4 mt-2 gap-1 flex-1">
+                    <li><a @click="$store.global.currentTab = 'usage_billing'" :class="{'active': $store.global.currentTab === 'usage_billing'}" x-text="$store.global.t('tab_usage_billing')"></a></li>
+                    <li><a @click="$store.global.currentTab = 'ai_accounts'" :class="{'active': $store.global.currentTab === 'ai_accounts'}" x-text="$store.global.t('tab_ai_accounts')"></a></li>
+                    <li><a @click="$store.global.currentTab = 'smart_routing'" :class="{'active': $store.global.currentTab === 'smart_routing'}" x-text="$store.global.t('tab_smart_routing')"></a></li>
+                    <li><a @click="$store.global.currentTab = 'client_access'" :class="{'active': $store.global.currentTab === 'client_access'}" x-text="$store.global.t('tab_client_access')"></a></li>
+                    <li><a @click="$store.global.currentTab = 'settings'" :class="{'active': $store.global.currentTab === 'settings'}" x-text="$store.global.t('tab_settings')"></a></li>
+                    <li><a @click="$store.global.currentTab = 'logs'" :class="{'active': $store.global.currentTab === 'logs'}" x-text="$store.global.t('tab_logs')"></a></li>
+                </ul>
+                
+                <!-- Theme & Lang & Pro Mode Switcher -->
+                <div class="px-6 py-5 border-t border-base-300 space-y-4 mt-auto">
+                    
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-bold text-base-content" :class="$store.global.proMode ? 'text-primary' : ''" x-text="$store.global.proMode ? $store.global.t('pro_mode') : $store.global.t('simple_mode')"></span>
+                        <input type="checkbox" class="toggle toggle-primary" :checked="$store.global.proMode" @click="$store.global.toggleProMode()" />
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-semibold text-base-content/80" x-text="$store.global.t('theme_title')"></span>
+                        <div class="flex gap-2">
+                            <button class="btn btn-ghost btn-xs px-1" @click="$store.global.setTheme('light')" :class="$store.global.theme === 'light' ? 'text-primary' : 'opacity-50'">🌞</button>
+                            <button class="btn btn-ghost btn-xs px-1" @click="$store.global.setTheme('dark')" :class="$store.global.theme === 'dark' ? 'text-primary' : 'opacity-50'">🌙</button>
+                            <button class="btn btn-ghost btn-xs px-1" @click="$store.global.setTheme('system')" :class="$store.global.theme === 'system' ? 'text-primary' : 'opacity-50'">💻</button>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-semibold text-base-content/80" x-text="$store.global.t('lang_title')"></span>
+                        <div class="flex gap-2 font-medium">
+                            <button class="btn btn-ghost btn-xs px-1" @click="$store.global.setLang('zh')" :class="$store.global.lang === 'zh' ? 'text-primary' : 'opacity-50'" x-text="$store.global.t('lang_zh')"></button>
+                            <button class="btn btn-ghost btn-xs px-1" @click="$store.global.setLang('en')" :class="$store.global.lang === 'en' ? 'text-primary' : 'opacity-50'" x-text="$store.global.t('lang_en')"></button>
+                        </div>
+                    </div>
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Alpine JS App Script -->
+    <script type="module" src="app.js?v=3"></script>
+
+    <!-- Alpine JS Core -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</body>
+</html>

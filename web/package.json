@@ -1,0 +1,13 @@
+{
+  "name": "hermes-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npx tailwindcss -i ./ui/input.css -o ./ui/tailwind.css --minify",
+    "watch": "npx tailwindcss -i ./ui/input.css -o ./ui/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "daisyui": "^4.10.1",
+    "tailwindcss": "^3.4.3"
+  }
+}

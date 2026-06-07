@@ -1,0 +1,39 @@
+# .gitignore
+*.log
+.env
+*.db
+*.exe
+/bin/
+*.db-*
+.DS_Store
+/polarisagi
+/hermes
+tmp_bin/
+docs/superpowers/
+*.md
+!README.md
+!README_zh.md
+!ARCHITECTURE.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!CHANGELOG.md
+!SECURITY.md
+!.github/**/*.md
+
+# Sisyphus
+.sisyphus/
+
+
+.firecrawl/
+
+# Frontend
+node_modules/
+dist/
+build/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+hermes
