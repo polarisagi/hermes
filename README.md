@@ -16,6 +16,9 @@ Originally designed as a Google Vertex AI adapter, it has completely evolved int
 
 It completely solves business interruptions caused by API Key rate limits, bans, or depleted balances by utilizing multi-account rotation and intelligent concurrency queuing. The latest version is purely **Zero-Config**, driven by an embedded **SQLite** database, and comes with a built-in **Web Admin Dashboard**.
 
+> **🌟 Why the name Hermes?**
+> In Greek mythology, Hermes is the swift messenger of the gods and the patron of boundaries. Similarly, **PolarisAGI-Hermes** acts as the ultimate "messenger" in the AI world—seamlessly translating complex, heterogeneous AI protocols (OpenAI, Anthropic, Gemini) and guiding requests swiftly and reliably across boundaries, breaking the silos between different AI providers.
+
 ---
 
 ### ✨ Core Features
