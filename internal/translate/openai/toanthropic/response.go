@@ -135,6 +135,7 @@ func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, _ := w.(http.Flusher)
 	reader := bufio.NewReader(resp.Body)

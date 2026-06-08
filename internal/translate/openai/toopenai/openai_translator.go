@@ -70,9 +70,14 @@ func (t *OpenAITranslator) TranslateRequest(
 
 func (t *OpenAITranslator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
 	translate.CopyHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
 
 	stream := strings.Contains(resp.Header.Get("Content-Type"), "event-stream")
+	if stream {
+		w.Header().Set("X-Accel-Buffering", "no")
+	}
+
+	w.WriteHeader(resp.StatusCode)
+
 	if stream {
 		translate.ForwardStreamBody(w, resp.Body)
 	} else {
