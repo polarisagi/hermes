@@ -51,7 +51,11 @@ func ExtractPartsText(partsRaw interface{}) string {
 	return sb.String()
 }
 
-// ThinkingLevelToEffort 将 Gemini 3.x thinkingLevel 枚举映射到通用 effort 字符串。
+// ThinkingLevelToEffort 将 Gemini thinkingLevel 枚举映射到通用 effort 字符串。
+//
+// Gemini 2.5 枚举：MINIMAL / LOW / MEDIUM / HIGH
+// Gemini 3.x 枚举：LOW / MEDIUM / HIGH（无 MINIMAL）
+// 两者的 LOW/MINIMAL 都映射到 effort:low。
 func ThinkingLevelToEffort(level string) string {
 	switch strings.ToUpper(level) {
 	case "NONE":

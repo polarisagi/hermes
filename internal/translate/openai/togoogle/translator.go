@@ -77,14 +77,13 @@ func (t *OpenAIToGoogleTranslator) TranslateRequest(
 
 func (t *OpenAIToGoogleTranslator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
 	// 判断是否是流式
-	// 网关并不在翻译器里判断 HTTP Status 429。只要这里被调用，通常说明网关已经获得了 200 或者需要原样返回。
 	isStream := false
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") || strings.Contains(r.URL.Path, "streamGenerateContent") {
 		isStream = true
 	}
 
-	// targetModel 我们通过推断获取，如果没传可以用临时替代
-	targetModel := "gemini_model"
+	// 从请求路径提取实际模型名（格式： /models/{model}:generateContent 或 :streamGenerateContent）
+	targetModel := extractModelFromPath(r.URL.Path)
 
 	if isStream {
 		handleStream(w, resp, targetModel)
@@ -92,4 +91,20 @@ func (t *OpenAIToGoogleTranslator) TranslateResponse(w http.ResponseWriter, r *h
 		handleNonStream(w, resp, targetModel)
 	}
 	return nil
+}
+
+// extractModelFromPath 从 Gemini API 请求路径中提取模型名。
+// 路径格式： /models/{model}:generateContent 或 /models/{model}:streamGenerateContent
+func extractModelFromPath(path string) string {
+	const prefix = "/models/"
+	idx := strings.Index(path, prefix)
+	if idx == -1 {
+		return ""
+	}
+	sub := path[idx+len(prefix):]
+	// 去掉 :generateContent 、:streamGenerateContent 及 query string
+	if i := strings.IndexAny(sub, ":?"); i != -1 {
+		sub = sub[:i]
+	}
+	return sub
 }

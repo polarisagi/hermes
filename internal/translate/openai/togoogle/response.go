@@ -17,11 +17,9 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, model string) {
 	var gResp map[string]interface{}
 	_ = json.Unmarshal(body, &gResp)
 
-	// 从响应体提取 model
-	if model == "gemini_model" {
-		if m, ok := gResp["modelVersion"].(string); ok && m != "" {
-			model = m
-		}
+	// 优先使用 Gemini 响应体中的 modelVersion（包含具体版本号，比请求路径中的名称更精确）
+	if m, ok := gResp["modelVersion"].(string); ok && m != "" {
+		model = m
 	}
 
 	var textParts []string

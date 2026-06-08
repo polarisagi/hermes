@@ -51,23 +51,20 @@ func buildGeminiRequest(oReq map[string]interface{}, model string) map[string]in
 	}
 
 	// Gemini 3.x 在未设置 thinkingConfig 时默认内部思考但不返回 thought parts
-	// 设置 includeThoughts: true + MEDIUM 以接收 thought parts 供流式处理器转换
+	// 设置 includeThoughts:true + MEDIUM 以接收 thought parts 供流式处理器转换
 	if !thinkingSet && gcommon.IsGemini3Model(model) {
-		if cfg, ok := gReq["generationConfig"].(map[string]interface{}); ok {
-			if _, hasTC := cfg["thinkingConfig"]; !hasTC {
-				cfg["thinkingConfig"] = map[string]interface{}{
-					"includeThoughts": true,
-					"thinkingLevel":   "MEDIUM",
-				}
-				gReq["generationConfig"] = cfg
-			}
+		var cfg map[string]interface{}
+		if existing, ok := gReq["generationConfig"].(map[string]interface{}); ok {
+			cfg = existing
 		} else {
-			gReq["generationConfig"] = map[string]interface{}{
-				"thinkingConfig": map[string]interface{}{
-					"includeThoughts": true,
-					"thinkingLevel":   "MEDIUM",
-				},
+			cfg = make(map[string]interface{})
+		}
+		if _, hasTC := cfg["thinkingConfig"]; !hasTC {
+			cfg["thinkingConfig"] = map[string]interface{}{
+				"includeThoughts": true,
+				"thinkingLevel":   "MEDIUM",
 			}
+			gReq["generationConfig"] = cfg
 		}
 	}
 
@@ -384,34 +381,33 @@ func buildGenerationConfig(oReq map[string]interface{}) map[string]interface{} {
 // mergeThinkingConfig 将思考参数合并到 generationConfig
 //
 // Gemini 2.5：thinkingConfig.thinkingBudget（整数 token 数，-1=动态，0=禁用）
-// Gemini 3.x：thinkingConfig.thinkingLevel 枚举（MINIMAL/LOW/MEDIUM/HIGH），不接受 thinkingBudget
+// Gemini 3.x：thinkingConfig.thinkingLevel 枚举（LOW/MEDIUM/HIGH），不接受 thinkingBudget
 //
 // OpenAI effort → Gemini 2.5 thinkingBudget 映射：
 //
-//	none/low   → 0（禁用）
+//	none       → 0（禁用）
+//	minimal/low → 1024（最小值）
 //	medium     → 8192
 //	high       → 16384
 //	xhigh/max  → -1（动态）
 //
 // OpenAI effort → Gemini 3.x thinkingLevel 映射：
 //
-//	none/low   → MINIMAL
-//	medium     → MEDIUM
-//	high       → HIGH
-//	xhigh/max  → HIGH
+//	none/minimal/low → LOW（Gemini 3 无法完全禁用思考，LOW 是最低档）
+//	medium           → MEDIUM
+//	high/xhigh/max   → HIGH
 func mergeThinkingConfig(gConfig map[string]interface{}, effort string, model string) map[string]interface{} {
 	if gConfig == nil {
 		gConfig = make(map[string]interface{})
 	}
 	e := strings.ToLower(effort)
 	if gcommon.IsGemini3Model(model) {
-		// Gemini 3.x：使用 thinkingLevel 枚举
+		// Gemini 3.x：使用 thinkingLevel 枚举（LOW/MEDIUM/HIGH）
+		// 注意：Gemini 3 没有 MINIMAL 档位，LOW 是最低档
 		var level string
 		switch e {
-		case "none":
-			level = "MINIMAL"
-		case "minimal", "low":
-			level = "MINIMAL"
+		case "none", "minimal", "low":
+			level = "LOW"
 		case "medium":
 			level = "MEDIUM"
 		case "high", "xhigh", "max":

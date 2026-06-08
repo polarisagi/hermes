@@ -71,13 +71,19 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, model string) {
 		}
 	}
 
-	var inTokens, outTokens int
+	var inTokens, outTokens, thinkingTokens int
 	if usage, ok := aResp["usage"].(map[string]interface{}); ok {
 		if it, ok := usage["input_tokens"].(float64); ok {
 			inTokens = int(it)
 		}
 		if ot, ok := usage["output_tokens"].(float64); ok {
 			outTokens = int(ot)
+		}
+		// Anthropic 2025-2026 将思考 token 放在 output_tokens_details.thinking_tokens
+		if otd, ok := usage["output_tokens_details"].(map[string]interface{}); ok {
+			if tt, ok := otd["thinking_tokens"].(float64); ok {
+				thinkingTokens = int(tt)
+			}
 		}
 	}
 
@@ -107,10 +113,14 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, model string) {
 				"finish_reason": finishReason,
 			},
 		},
-		"usage": map[string]int{
+		"usage": map[string]interface{}{
 			"prompt_tokens":     inTokens,
 			"completion_tokens": outTokens,
 			"total_tokens":      inTokens + outTokens,
+			// completion_tokens_details 供上游 Responses API 转换层提取 reasoning_tokens
+			"completion_tokens_details": map[string]interface{}{
+				"reasoning_tokens": thinkingTokens,
+			},
 		},
 	}
 
@@ -132,6 +142,9 @@ func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
 
 	var msgID string
 	var currentToolIndex int = -1
+
+	// 用于在流结束时发送完整 usage chunk（含 reasoning_tokens）
+	var finalInTokens, finalOutTokens, finalThinkingTokens int
 
 	writeChunk := func(data interface{}) {
 		b, _ := json.Marshal(data)
@@ -169,6 +182,12 @@ func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
 				// 从 Anthropic 流式响应提取实际模型名
 				if m, ok := msg["model"].(string); ok && m != "" {
 					model = m
+				}
+				// 捕获 message_start 中的初始 usage（input_tokens）
+				if usage, ok := msg["usage"].(map[string]interface{}); ok {
+					if it, ok := usage["input_tokens"].(float64); ok {
+						finalInTokens = int(it)
+					}
 				}
 				writeChunk(map[string]interface{}{
 					"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
@@ -241,6 +260,18 @@ func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
 			}
 
 		case "message_delta":
+			// message_delta 包含 stop_reason 以及最终 usage（output_tokens + thinking_tokens）
+			if usage, ok := event["usage"].(map[string]interface{}); ok {
+				if ot, ok := usage["output_tokens"].(float64); ok {
+					finalOutTokens = int(ot)
+				}
+				// Anthropic 2025-2026 思考 token 在 output_tokens_details.thinking_tokens
+				if otd, ok := usage["output_tokens_details"].(map[string]interface{}); ok {
+					if tt, ok := otd["thinking_tokens"].(float64); ok {
+						finalThinkingTokens = int(tt)
+					}
+				}
+			}
 			if delta, ok := event["delta"].(map[string]interface{}); ok {
 				if stopReason, ok := delta["stop_reason"].(string); ok && stopReason != "" {
 					reason := "stop"
@@ -257,6 +288,22 @@ func handleStream(w http.ResponseWriter, resp *http.Response, model string) {
 				}
 			}
 		}
+	}
+
+	// 发送最终 usage chunk（含 reasoning_tokens，供上游 Responses API 转换层统计）
+	if msgID != "" {
+		writeChunk(map[string]interface{}{
+			"id": msgID, "object": "chat.completion.chunk", "created": created, "model": model,
+			"choices": []map[string]interface{}{},
+			"usage": map[string]interface{}{
+				"prompt_tokens":     finalInTokens,
+				"completion_tokens": finalOutTokens,
+				"total_tokens":      finalInTokens + finalOutTokens,
+				"completion_tokens_details": map[string]interface{}{
+					"reasoning_tokens": finalThinkingTokens,
+				},
+			},
+		})
 	}
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")

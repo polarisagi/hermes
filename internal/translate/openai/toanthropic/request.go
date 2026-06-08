@@ -72,11 +72,17 @@ func buildAnthropicRequest(oReq map[string]interface{}, targetModel string) (*an
 	} else if ef, ok := oReq["reasoning_effort"].(string); ok {
 		effort = ef
 	}
-	if effort != "" && effort != "none" {
-		// 2026 年统一使用 adaptive 格式 + 顶层 effort（适用 Claude Opus 4.6+ / Sonnet 4.6+）
-		// 旧的 {type:"enabled", budget_tokens:N} 格式已废弃
-		aReq.Thinking = &anthr.ThinkingConfig{Type: "adaptive"}
-		aReq.Effort = translate.MapEffortToAnthropic(effort)
+	if effort != "" {
+		if effort == "none" {
+			// effort=none: 明确禁用思考模式（对旧模型不传 thinking 则默认启用）
+			// Claude 新型 adaptive 模型不传 thinking 字段即不思考；传 disabled 对旧模型更安全
+			aReq.Thinking = &anthr.ThinkingConfig{Type: "disabled"}
+		} else {
+			// 2026 年统一使用 adaptive 格式 + 顶层 effort（适用 Claude Opus 4.6+ / Sonnet 4.6+）
+			// 旧的 {type:"enabled", budget_tokens:N} 格式已废弃
+			aReq.Thinking = &anthr.ThinkingConfig{Type: "adaptive"}
+			aReq.Effort = translate.MapEffortToAnthropic(effort)
+		}
 	}
 
 	return aReq, nil
