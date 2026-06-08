@@ -101,6 +101,9 @@ func adaptForCompatBackend(body []byte, targetModel string, kind translate.Backe
 		req["model"] = targetModel
 	}
 
+	// 移除 user 字段，防止 Codex 的随机 session id 破坏第三方模型（如 DeepSeek）的 cache 命中率
+	delete(req, "user")
+
 	// max_completion_tokens → max_tokens（DeepSeek/通用不支持 max_completion_tokens）
 	if mct, ok := req["max_completion_tokens"]; ok {
 		if _, hasMaxTokens := req["max_tokens"]; !hasMaxTokens {
@@ -151,16 +154,18 @@ func adaptForCompatBackend(body []byte, targetModel string, kind translate.Backe
 	return result
 }
 
-// replaceModelInJSON 替换 JSON 中的 model 字段
+// replaceModelInJSON 替换 JSON 中的 model 字段并移除 user 字段
 func replaceModelInJSON(body []byte, targetModel string) []byte {
-	if targetModel == "" {
-		return body
-	}
 	var m map[string]interface{}
 	if err := json.Unmarshal(body, &m); err != nil {
 		return body
 	}
-	m["model"] = targetModel
+	if targetModel != "" {
+		m["model"] = targetModel
+	}
+	
+	// 移除 user 字段，防止每次请求唯一 ID 破坏 OpenAI 前缀缓存
+	delete(m, "user")
 	result, err := json.Marshal(m)
 	if err != nil {
 		return body

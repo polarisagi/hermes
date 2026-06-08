@@ -35,6 +35,9 @@ func (t *OpenAIToGoogleTranslator) TranslateRequest(
 		return nil, "", fmt.Errorf("invalid OpenAI JSON payload: %w", err)
 	}
 
+	// 移除 user 字段，防止每次请求生成唯一的会话 ID 破坏前端或代理层的缓存
+	delete(oReq, "user")
+
 	// 2. 确定模型名
 	if targetModel == "" {
 		if m, ok := oReq["model"].(string); ok && m != "" {
