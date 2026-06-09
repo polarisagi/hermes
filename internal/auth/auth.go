@@ -47,7 +47,10 @@ func getGoogleToken(ctx context.Context, provider *domain.UserProvider) (string,
 	}
 
 	// 首次解析 ADC JSON
-	googleCreds, err := google.CredentialsFromJSON(ctx, []byte(credStr), "https://www.googleapis.com/auth/cloud-platform")
+	//nolint:staticcheck // We trust the ADC JSON configured by the admin
+	googleCreds, err := google.CredentialsFromJSONWithParams(ctx, []byte(credStr), google.CredentialsParams{
+		Scopes: []string{"https://www.googleapis.com/auth/cloud-platform"},
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to parse google credentials: %w", err)
 	}
