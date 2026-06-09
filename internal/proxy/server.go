@@ -271,7 +271,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var targetProtocol string
 		var targetEndpoint *domain.SysAccessEndpoint
-		for _, p := range targetPriority[clientProtocol] {
+		
+		priorityList := targetPriority[clientProtocol]
+		lowerModel := strings.ToLower(actualModel)
+		if strings.Contains(lowerModel, "gemini") || strings.Contains(lowerModel, "gemma") {
+			priorityList = []string{"google", "openai", "anthropic"}
+		} else if strings.Contains(lowerModel, "claude") {
+			priorityList = []string{"anthropic", "openai", "google"}
+		}
+
+		for _, p := range priorityList {
 			if ep, exists := activeChan.Endpoints[p]; exists {
 				targetProtocol = p
 				targetEndpoint = ep
@@ -394,6 +403,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("上游返回 4xx 错误",
 				"status", resp.StatusCode,
 				"provider", activeChan.Provider.ProviderID,
+				"account", activeChan.Provider.Name,
+				"url", targetURL,
 				"model", actualModel,
 				"error_body", errSnippet,
 			)
