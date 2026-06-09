@@ -151,8 +151,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var finalReqBody []byte
 	var finalReqModel string
+	var skipBilling bool
 
 	defer func() {
+		if skipBilling {
+			return
+		}
 		latencyMs := int(time.Since(startTime).Milliseconds())
 		p, c, cache, content := iw.GetTokens()
 
@@ -235,6 +239,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 拦截处理客户端特有的探测、WebSocket 等预检请求
 	if openai.HandleClientProbes(w, r) {
+		return
+	}
+
+	// 拦截处理 Anthropic token 统计请求
+	if clientProtocol == "anthropic" && strings.HasSuffix(path, "/count_tokens") {
+		skipBilling = true
+		tokens := billing.EstimatePromptTokens(bodyBytes)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"input_tokens": %d}`, tokens)
+		slog.Info("网关本地拦截 count_tokens 请求", "path", path, "estimated_tokens", tokens)
 		return
 	}
 

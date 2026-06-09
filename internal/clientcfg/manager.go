@@ -78,14 +78,18 @@ var allClients = []clientDef{
 		InstallDir:    ".claude",
 		ConfigRelPath: ".claude/settings.json",
 		applyFn: func(home, listenAddr string) error {
+			// 写入 .claude.json 跳过初次安装确认，允许无账号用户直接使用
+			claudeJsonPath := filepath.Join(home, ".claude.json")
+			_ = applyJSONConfig(claudeJsonPath, map[string]any{"hasCompletedOnboarding": true})
+
 			return applyJSONConfig(
 				filepath.Join(home, ".claude/settings.json"),
 				map[string]any{
-					"primaryApiKey": polarisAPIKey,
+					"ANTHROPIC_AUTH_TOKEN": polarisAPIKey,
+					"ANTHROPIC_BASE_URL":   "http://" + listenAddr + "/v1/anthropic",
 					"env": map[string]any{
 						"ANTHROPIC_BASE_URL":   "http://" + listenAddr + "/v1/anthropic",
 						"ANTHROPIC_AUTH_TOKEN": polarisAPIKey,
-						"ANTHROPIC_API_KEY":    polarisAPIKey,
 					},
 				},
 			)
@@ -96,6 +100,23 @@ var allClients = []clientDef{
 			return isJSONConfiguredValue(path, "env.ANTHROPIC_BASE_URL", expectedURL)
 		},
 		cleanFn: func(home, listenAddr string) error {
+			// 恢复 .claude.json
+			claudeJsonPath := filepath.Join(home, ".claude.json")
+			if data, err := os.ReadFile(claudeJsonPath); err == nil {
+				var obj map[string]any
+				if err := json.Unmarshal(data, &obj); err == nil {
+					if val, ok := obj["hasCompletedOnboarding"].(bool); ok && val {
+						delete(obj, "hasCompletedOnboarding")
+						if len(obj) == 0 {
+							_ = os.Remove(claudeJsonPath)
+						} else {
+							out, _ := json.MarshalIndent(obj, "", "  ")
+							_ = atomicWriteFile(claudeJsonPath, out, 0644)
+						}
+					}
+				}
+			}
+
 			path := filepath.Join(home, ".claude/settings.json")
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -106,19 +127,19 @@ var allClients = []clientDef{
 			if err := json.Unmarshal(data, &obj); err != nil {
 				return err
 			}
-			if key, ok := obj["primaryApiKey"].(string); ok && key == polarisAPIKey {
-				delete(obj, "primaryApiKey")
+			if key, ok := obj["ANTHROPIC_AUTH_TOKEN"].(string); ok && key == polarisAPIKey {
+				delete(obj, "ANTHROPIC_AUTH_TOKEN")
+			}
+			expectedURL := "http://" + listenAddr + "/v1/anthropic"
+			if url, ok := obj["ANTHROPIC_BASE_URL"].(string); ok && url == expectedURL {
+				delete(obj, "ANTHROPIC_BASE_URL")
 			}
 			if env, ok := obj["env"].(map[string]any); ok {
-				expectedURL := "http://" + listenAddr + "/v1/anthropic"
 				if url, ok := env["ANTHROPIC_BASE_URL"].(string); ok && url == expectedURL {
 					delete(env, "ANTHROPIC_BASE_URL")
 				}
 				if key, ok := env["ANTHROPIC_AUTH_TOKEN"].(string); ok && key == polarisAPIKey {
 					delete(env, "ANTHROPIC_AUTH_TOKEN")
-				}
-				if key, ok := env["ANTHROPIC_API_KEY"].(string); ok && key == polarisAPIKey {
-					delete(env, "ANTHROPIC_API_KEY")
 				}
 			}
 			out, _ := json.MarshalIndent(obj, "", "  ")
