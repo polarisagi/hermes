@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,24 @@ func BuildTargetURL(provider *domain.UserProvider, targetEndpoint *domain.SysAcc
 	subPath := strings.TrimPrefix(incomingPath, "/v1")
 	if !strings.HasPrefix(subPath, "/") {
 		subPath = "/" + subPath
+	}
+
+	// 动态替换 GCP Vertex AI 的 project_id 和 region
+	if provider != nil && len(provider.AuthCredentials) > 0 &&
+		(strings.Contains(baseURL, "{project_id}") || strings.Contains(baseURL, "{region}") || strings.Contains(baseURL, "{location}")) {
+		var creds map[string]interface{}
+		_ = json.Unmarshal(provider.AuthCredentials, &creds)
+		if pid, ok := creds["project_id"].(string); ok && pid != "" {
+			baseURL = strings.ReplaceAll(baseURL, "{project_id}", pid)
+		}
+		region := "global"
+		if reg, ok := creds["region"].(string); ok && reg != "" {
+			region = reg
+		} else if loc, ok := creds["location"].(string); ok && loc != "" {
+			region = loc
+		}
+		baseURL = strings.ReplaceAll(baseURL, "{region}", region)
+		baseURL = strings.ReplaceAll(baseURL, "{location}", region)
 	}
 
 	// 特殊处理 Google Gemini (根据模型名称等可能需要 /v1beta)

@@ -36,9 +36,15 @@ func buildGEAPURL(provider *domain.UserProvider, targetEndpoint *domain.SysAcces
 		projectID = pid
 	}
 	location := defaultLocation
+	if reg, ok := creds["region"].(string); ok && reg != "" {
+		location = reg
+	} else if loc, ok := creds["location"].(string); ok && loc != "" {
+		location = loc
+	}
 
 	url := strings.ReplaceAll(tmpl, "{project_id}", projectID)
 	url = strings.ReplaceAll(url, "{location}", location)
+	url = strings.ReplaceAll(url, "{region}", location)
 	url = strings.ReplaceAll(url, "{subpath}", subpath)
 	return url
 }

@@ -4,15 +4,67 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/polarisagi/hermes/internal/domain"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
+
+var (
+	adcTokenSourceCache sync.Map // map[string]oauth2.TokenSource
+)
+
+// getGoogleToken 提取或置换 Google OAuth Token
+func getGoogleToken(ctx context.Context, provider *domain.UserProvider) (string, error) {
+	if provider == nil || len(provider.AuthCredentials) == 0 {
+		return "", errors.New("empty auth credentials")
+	}
+
+	credStr := string(provider.AuthCredentials)
+	var creds map[string]interface{}
+	if err := json.Unmarshal(provider.AuthCredentials, &creds); err == nil {
+		if adc, ok := creds["adc_json"].(string); ok && adc != "" {
+			credStr = adc
+		}
+	}
+
+	credStr = strings.TrimSpace(credStr)
+	if credStr == "" {
+		return "", errors.New("empty adc_json")
+	}
+
+	// 缓存中获取 TokenSource
+	if ts, ok := adcTokenSourceCache.Load(credStr); ok {
+		tok, err := ts.(oauth2.TokenSource).Token()
+		if err != nil {
+			return "", err
+		}
+		return tok.AccessToken, nil
+	}
+
+	// 首次解析 ADC JSON
+	googleCreds, err := google.CredentialsFromJSON(ctx, []byte(credStr), "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		return "", fmt.Errorf("failed to parse google credentials: %w", err)
+	}
+
+	adcTokenSourceCache.Store(credStr, googleCreds.TokenSource)
+
+	tok, err := googleCreds.TokenSource.Token()
+	if err != nil {
+		return "", fmt.Errorf("failed to get google token: %w", err)
+	}
+
+	return tok.AccessToken, nil
+}
 
 // InjectAuth 根据端点的 AuthType 动态注入鉴权凭证
 // 参数直接使用 domain 类型，不依赖 pool 包
-func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvider, ep *domain.SysAccessEndpoint) error {
+func InjectAuth(ctx context.Context, req *http.Request, provider *domain.UserProvider, ep *domain.SysAccessEndpoint) error {
 	switch ep.AuthType {
 	case domain.AuthTypeNone:
 		return nil
@@ -54,8 +106,13 @@ func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvi
 			req.Header.Set("Authorization", "Bearer "+token)
 			return nil
 		}
-		// TODO: 实现 Google ADC OAuth token 置换
-		return errors.New("auth type adc not fully implemented yet")
+		// 动态置换并缓存 Google ADC OAuth Token
+		token, err := getGoogleToken(ctx, provider)
+		if err != nil {
+			return fmt.Errorf("auth type adc failed: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return nil
 
 	case domain.AuthTypeAWSSigV4:
 		// TODO: 实现 AWS Signature V4
