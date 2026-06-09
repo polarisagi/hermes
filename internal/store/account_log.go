@@ -51,8 +51,8 @@ type DashboardStat struct {
 func (r *AccountLogRepo) GetDashboardStats(ctx context.Context, start, end string) ([]DashboardStat, error) {
 	query := `
 		SELECT 
-			COALESCE(account_name, 'Default') as account,
-			COALESCE(api_protocol, 'UNDEFINED') as platform,
+			COALESCE(NULLIF(account_name, ''), 'Default') as account,
+			COALESCE(NULLIF(api_protocol, ''), 'UNDEFINED') as platform,
 			SUM(cost) as period_cost_usd,
 			SUM(prompt_tokens) as prompt_tokens,
 			SUM(completion_tokens) as completion_tokens,

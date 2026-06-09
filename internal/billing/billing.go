@@ -45,7 +45,11 @@ func ProcessBilling(
 	totalTokens := promptTokens + completionTokens
 
 	// 计算费用
-	cost := CalculateCost(providerName, actualModelID, promptTokens, completionTokens, cachedTokens, reqBody)
+	var cost float64
+	// 只有成功路由到真实上游厂商（providerName != ""）并且请求成功（statusCode < 400）时，才计算费用
+	if providerName != "" && statusCode < 400 {
+		cost = CalculateCost(providerName, actualModelID, promptTokens, completionTokens, cachedTokens, reqBody)
+	}
 
 	// 打印明确的计费和 Token 消耗日志
 	slog.Info("💰 [Billing] 请求计费统计",
