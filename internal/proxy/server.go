@@ -21,6 +21,7 @@ import (
 	"github.com/polarisagi/hermes/internal/pool"
 	"github.com/polarisagi/hermes/internal/router"
 	"github.com/polarisagi/hermes/internal/translate"
+	"github.com/polarisagi/hermes/internal/translate/anthropic"
 	"github.com/polarisagi/hermes/internal/translate/openai"
 	"github.com/polarisagi/hermes/pkg/httpclient"
 	"github.com/polarisagi/hermes/pkg/logger"
@@ -245,7 +246,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 拦截处理 Anthropic token 统计请求
 	if clientProtocol == "anthropic" && strings.HasSuffix(path, "/count_tokens") {
 		skipBilling = true
-		tokens := billing.EstimateAnthropicTokens(bodyBytes)
+		tokens := anthropic.EstimateTokens(bodyBytes)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"input_tokens": %d}`, tokens)
@@ -294,7 +295,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var targetProtocol string
 		var targetEndpoint *domain.SysAccessEndpoint
-		
+
 		priorityList := targetPriority[clientProtocol]
 		lowerModel := strings.ToLower(actualModel)
 		if strings.Contains(lowerModel, "gemini") || strings.Contains(lowerModel, "gemma") {
