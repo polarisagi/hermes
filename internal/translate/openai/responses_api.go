@@ -307,6 +307,9 @@ func (p *PipeResponseWriter) Close() {
 }
 
 func (p *PipeResponseWriter) Write(b []byte) (int, error) {
+	if p.status == 0 {
+		p.WriteHeader(http.StatusOK)
+	}
 	return p.Pw.Write(b)
 }
 

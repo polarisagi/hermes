@@ -353,7 +353,7 @@ export default {
                     if (!this.nodeModal.isEdit) {
                         this.nodeForm.endpoints = this.availableEndpoints.map(e => ({
                             sys_endpoint_id: e.endpoint_id,
-                            is_enabled: true,
+                            is_enabled: (this.nodeForm.provider === 'agent_platform' && e.api_protocol === 'anthropic') ? false : true,
                             custom_base_url: ''
                         }));
                     } else {

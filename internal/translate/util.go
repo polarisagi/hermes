@@ -100,6 +100,7 @@ func CopyHeaders(dst http.Header, src http.Header) {
 			strings.EqualFold(k, "Content-Length") ||
 			strings.EqualFold(k, "Transfer-Encoding") ||
 			strings.EqualFold(k, "Accept-Encoding") ||
+			strings.EqualFold(k, "Content-Encoding") ||
 			strings.EqualFold(k, "Authorization") ||
 			strings.HasPrefix(strings.ToLower(k), "x-stainless-") {
 			continue

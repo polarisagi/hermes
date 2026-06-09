@@ -80,6 +80,7 @@ var targetPriority = map[string][]string{
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	slog.Info("📥 [Incoming Request]", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 	startTime := time.Now()
 	iw := billing.NewInterceptResponseWriter(w)
 	w = iw
@@ -140,6 +141,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			latencyMs,
 			iw.StatusCode,
 			"",
+			r.Method,
+			r.URL.Path,
 		)
 	}()
 	if r.Method == http.MethodOptions {
@@ -200,21 +203,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	// 拦截处理常见的 GET 请求（例如客户端发现可用模型列表），避免解析空 body
-	if r.Method == http.MethodGet {
-		if strings.HasSuffix(path, "/models") {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"object": "list", "data": [{"id": "gpt-4", "object": "model", "created": 1687882411, "owned_by": "openai"}]}`))
-			return
-		}
-
-		// 拦截 WebSocket 升级请求，直接拒绝，避免 Codex 报错 "unexpected status 200 OK"
-		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
-			http.Error(w, "WebSockets are not supported by this proxy", http.StatusNotImplemented)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
+	// 拦截处理客户端特有的探测、WebSocket 等预检请求
+	if openai.HandleClientProbes(w, r) {
 		return
 	}
 
@@ -238,15 +228,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var modelName string
 	if m, ok := reqMap["model"].(string); ok {
 		modelName = m
-	}
-
-	// Codex 原生 Responses API 可能不携带 model 参数
-	if modelName == "" {
-		if strings.HasPrefix(path, "/v1/openai/") {
-			modelName = "gpt-4o" // 赋予默认模型以供路由匹配
-		} else {
-			modelName = "default"
-		}
 	}
 
 	finalReqModel = modelName

@@ -23,6 +23,8 @@ func ProcessBilling(
 	latencyMs int,
 	statusCode int,
 	errorMsg string,
+	reqMethod string,
+	reqPath string,
 ) {
 	promptTokens := int64(upstreamPromptTokens)
 	completionTokens := int64(upstreamCompletionTokens)
@@ -48,6 +50,8 @@ func ProcessBilling(
 	// 打印明确的计费和 Token 消耗日志
 	slog.Info("💰 [Billing] 请求计费统计",
 		"client", clientName,
+		"method", reqMethod,
+		"path", reqPath,
 		"model", actualModelID,
 		"latency_ms", latencyMs,
 		"prompt_tokens", promptTokens,
