@@ -19,35 +19,7 @@ func isClaudeModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "claude-")
 }
 
-// buildGEAPURL 构建 Google Agent Platform 端点 URL
-func buildGEAPURL(provider *domain.UserProvider, targetEndpoint *domain.SysAccessEndpoint, publisher, subpath, defaultLocation string) string {
-	tmpl := ""
-	if targetEndpoint != nil {
-		tmpl = strings.TrimSuffix(targetEndpoint.DefaultBaseURL, "/")
-	}
-	if tmpl == "" {
-		tmpl = "https://aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/" + publisher + "/{subpath}"
-	}
 
-	var creds map[string]interface{}
-	_ = json.Unmarshal(provider.AuthCredentials, &creds)
-	projectID := ""
-	if pid, ok := creds["project_id"].(string); ok {
-		projectID = pid
-	}
-	location := defaultLocation
-	if reg, ok := creds["region"].(string); ok && reg != "" {
-		location = reg
-	} else if loc, ok := creds["location"].(string); ok && loc != "" {
-		location = loc
-	}
-
-	url := strings.ReplaceAll(tmpl, "{project_id}", projectID)
-	url = strings.ReplaceAll(url, "{location}", location)
-	url = strings.ReplaceAll(url, "{region}", location)
-	url = strings.ReplaceAll(url, "{subpath}", subpath)
-	return url
-}
 
 // Translator 实现了 translate.Translator 接口（Anthropic → Google Agent Platform）
 type Translator struct{}
@@ -91,8 +63,7 @@ func (t *Translator) TranslateRequest(
 		} else {
 			subpath = fmt.Sprintf("models/%s:rawPredict", finalModel)
 		}
-		targetURL := buildGEAPURL(provider, targetEndpoint, "anthropic", subpath, "us-east5")
-		return geapBody, targetURL, nil
+		return geapBody, "/" + subpath, nil
 	}
 
 	vReq, _ := mapToVertexRequest(req, finalModel)
@@ -150,8 +121,7 @@ func (t *Translator) TranslateRequest(
 	} else {
 		subpath = fmt.Sprintf("models/%s:generateContent", finalModel)
 	}
-	targetURL := buildGEAPURL(provider, targetEndpoint, "google", subpath, "global")
-	return vReqBytes, targetURL, nil
+	return vReqBytes, "/" + subpath, nil
 }
 
 func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
