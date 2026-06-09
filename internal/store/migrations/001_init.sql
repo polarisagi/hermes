@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS user_models (
     is_active        BOOLEAN DEFAULT 1,
     FOREIGN KEY(user_provider_id) REFERENCES user_providers(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_models_user_provider_id_model_id ON user_models(user_provider_id, model_id);
 
 -- 用户手动覆盖 + 系统自动学习的意图字典（优先级高于 sys 字典）
 CREATE TABLE IF NOT EXISTS user_model_intent_dict (
