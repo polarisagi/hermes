@@ -112,32 +112,57 @@ func (h *AdminHandler) SyncModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		var matchedEp *domain.SysAccessEndpoint
 		var baseURL string
 		for _, sysEp := range sysEps {
-			if sysEp.APIProtocol == "openai" {
+			if sysEp.APIProtocol == "openai" || sysEp.APIProtocol == "anthropic" || sysEp.APIProtocol == "google" {
+				if sysEp.AuthType == "adc" {
+					continue
+				}
 				baseURL = strings.TrimSuffix(sysEp.DefaultBaseURL, "/")
 				for _, userEp := range p.Endpoints {
 					if userEp.SysEndpointID == sysEp.EndpointID && userEp.CustomBaseURL != "" {
 						baseURL = strings.TrimSuffix(userEp.CustomBaseURL, "/")
 					}
 				}
+				epCopy := sysEp
+				matchedEp = &epCopy
 				break
 			}
 		}
 
-		if baseURL == "" {
-			continue
-		}
-
-		client := &http.Client{Timeout: 10 * time.Second}
-		req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
-		if err != nil {
+		if matchedEp == nil || baseURL == "" {
 			continue
 		}
 
 		var creds map[string]string
-		if err := json.Unmarshal(p.AuthCredentials, &creds); err == nil && creds["api_key"] != "" {
-			req.Header.Set("Authorization", "Bearer "+creds["api_key"])
+		if err := json.Unmarshal(p.AuthCredentials, &creds); err != nil || creds["api_key"] == "" {
+			continue
+		}
+		apiKey := creds["api_key"]
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		var req *http.Request
+		var errReq error
+
+		switch matchedEp.APIProtocol {
+		case "openai":
+			req, errReq = http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
+			if errReq == nil {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+			}
+		case "anthropic":
+			req, errReq = http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
+			if errReq == nil {
+				req.Header.Set("x-api-key", apiKey)
+				req.Header.Set("anthropic-version", "2023-06-01")
+			}
+		case "google":
+			req, errReq = http.NewRequestWithContext(ctx, "GET", baseURL+"/models?key="+apiKey, nil)
+		}
+
+		if errReq != nil || req == nil {
+			continue
 		}
 
 		resp, err := client.Do(req)
@@ -152,6 +177,9 @@ func (h *AdminHandler) SyncModels(w http.ResponseWriter, r *http.Request) {
 			Data []struct {
 				ID string `json:"id"`
 			} `json:"data"`
+			Models []struct {
+				Name string `json:"name"`
+			} `json:"models"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 			resp.Body.Close()
@@ -159,25 +187,37 @@ func (h *AdminHandler) SyncModels(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Body.Close()
 
-		for _, m := range res.Data {
-			weight := inferer.ParseVersionWeight(m.ID)
-			tier, source := inferer.InferTierOnly(ctx, m.ID)
-			isLegacy := inferer.IsLegacyModel(m.ID)
+		var modelIDs []string
+		if len(res.Data) > 0 {
+			for _, m := range res.Data {
+				modelIDs = append(modelIDs, m.ID)
+			}
+		} else if len(res.Models) > 0 {
+			for _, m := range res.Models {
+				id := strings.TrimPrefix(m.Name, "models/")
+				modelIDs = append(modelIDs, id)
+			}
+		}
+
+		for _, modelID := range modelIDs {
+			weight := inferer.ParseVersionWeight(modelID)
+			tier, source := inferer.InferTierOnly(ctx, modelID)
+			isLegacy := inferer.IsLegacyModel(modelID)
 
 			_ = h.modelRepo.UpsertSysModel(ctx, &domain.SysModel{
-				ModelID:        m.ID,
-				DisplayName:    m.ID,
+				ModelID:        modelID,
+				DisplayName:    modelID,
 				VersionWeight:  weight,
 				IsLegacy:       isLegacy,
 				CapabilityTier: tier,
 			})
 			_ = h.modelRepo.UpsertSysProviderModel(ctx, &domain.SysProviderModel{
 				ProviderID:    p.ProviderID,
-				ModelID:       m.ID,
-				ActualModelID: m.ID,
+				ModelID:       modelID,
+				ActualModelID: modelID,
 			})
 			_ = h.intentRepo.SaveSysIntent(ctx, &domain.UserModelIntentDict{
-				ModelID:        m.ID,
+				ModelID:        modelID,
 				CapabilityTier: tier,
 				Source:         source,
 			})
