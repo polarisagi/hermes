@@ -87,16 +87,34 @@ func EstimateTokens(bodyBytes []byte) int64 {
 
 	// Tools
 	for _, tool := range req.Tools {
-		if tool.Type != "" {
-			total += builtinToolTokenCost(tool.Type)
-			continue
+		// 动态计算真实的消耗：只要客户端传了内容，就实打实地算
+		var toolCost int64 = 0
+		if tool.Name != "" {
+			toolCost += billing.EstimateCompletionTokens(tool.Name)
 		}
-		total += billing.EstimateCompletionTokens(tool.Name)
-		total += billing.EstimateCompletionTokens(tool.Description)
+		if tool.Description != "" {
+			toolCost += billing.EstimateCompletionTokens(tool.Description)
+		}
 		if tool.InputSchema != nil {
 			b, _ := json.Marshal(tool.InputSchema)
-			total += billing.EstimateCompletionTokens(string(b))
+			// 空 schema "{}" 不算实际载荷
+			if string(b) != "{}" {
+				toolCost += billing.EstimateCompletionTokens(string(b))
+			}
 		}
+
+		// 只有在客户端完全没有提供 Schema 的情况下（纯依赖后端隐式注入的 Built-in Tool），
+		// 我们才 Fallback 到官方经验值的硬编码估算。
+		if tool.InputSchema == nil && tool.Type != "" && tool.Type != "custom" {
+			toolCost += builtinToolTokenCost(tool.Type)
+		}
+
+		// 对于没有任何内容的空白 tool fallback 给个低保（防止除零或异常）
+		if toolCost == 0 {
+			toolCost += 10
+		}
+
+		total += toolCost
 	}
 
 	return total
