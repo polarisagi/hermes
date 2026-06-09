@@ -81,12 +81,12 @@ func (t *OpenAIToGoogleTranslator) TranslateRequest(
 func (t *OpenAIToGoogleTranslator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
 	// 判断是否是流式
 	isStream := false
-	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") || strings.Contains(r.URL.Path, "streamGenerateContent") {
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") || strings.Contains(resp.Request.URL.Path, "streamGenerateContent") {
 		isStream = true
 	}
 
 	// 从请求路径提取实际模型名（格式： /models/{model}:generateContent 或 :streamGenerateContent）
-	targetModel := extractModelFromPath(r.URL.Path)
+	targetModel := extractModelFromPath(resp.Request.URL.Path)
 
 	if isStream {
 		handleStream(w, resp, targetModel)

@@ -126,9 +126,9 @@ func (t *Translator) TranslateRequest(
 
 func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
 	stream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") ||
-		strings.Contains(r.URL.Path, "stream")
+		strings.Contains(resp.Request.URL.Path, "stream")
 
-	isGEAPClaude := strings.Contains(r.URL.Path, "anthropic")
+	isGEAPClaude := strings.Contains(resp.Request.URL.Path, "anthropic")
 	model := "google_model"
 
 	if isGEAPClaude {
