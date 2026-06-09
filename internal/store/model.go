@@ -15,10 +15,12 @@ func NewModelRepo() *ModelRepo {
 
 func (r *ModelRepo) GetUserModels(ctx context.Context) ([]domain.UserModel, error) {
 	query := `
-		SELECT id, user_provider_id, IFNULL(display_name, ''), model_id, capability_tier, is_active
-		FROM user_models
-		WHERE is_active = 1
-		ORDER BY capability_tier ASC, model_id ASC
+		SELECT u.id, u.user_provider_id, IFNULL(u.display_name, ''), u.model_id, u.capability_tier, u.is_active,
+		       IFNULL(s.version_weight, 0), IFNULL(s.is_legacy, 0), IFNULL(s.released_at, 0)
+		FROM user_models u
+		LEFT JOIN sys_models s ON u.model_id = s.model_id
+		WHERE u.is_active = 1
+		ORDER BY u.capability_tier ASC, u.model_id ASC
 	`
 	rows, err := DB().QueryContext(ctx, query)
 	if err != nil {
@@ -29,8 +31,12 @@ func (r *ModelRepo) GetUserModels(ctx context.Context) ([]domain.UserModel, erro
 	var models []domain.UserModel
 	for rows.Next() {
 		var m domain.UserModel
-		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive); err != nil {
+		var releasedAt int64
+		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive, &m.VersionWeight, &m.IsLegacy, &releasedAt); err != nil {
 			return nil, err
+		}
+		if m.VersionWeight == 0 && releasedAt > 0 {
+			m.VersionWeight = int(releasedAt)
 		}
 		models = append(models, m)
 	}
@@ -144,8 +150,12 @@ func (r *ModelRepo) DeleteUserModel(ctx context.Context, id int) error {
 
 func (r *ModelRepo) GetUserModelsByProvider(ctx context.Context, userProviderID int) ([]domain.UserModel, error) {
 	rows, err := DB().QueryContext(ctx, `
-		SELECT id, user_provider_id, IFNULL(display_name, ''), model_id, capability_tier, is_active
-		FROM user_models WHERE user_provider_id = ? ORDER BY capability_tier, model_id`, userProviderID)
+		SELECT u.id, u.user_provider_id, IFNULL(u.display_name, ''), u.model_id, u.capability_tier, u.is_active,
+		       IFNULL(s.version_weight, 0), IFNULL(s.is_legacy, 0), IFNULL(s.released_at, 0)
+		FROM user_models u
+		LEFT JOIN sys_models s ON u.model_id = s.model_id
+		WHERE u.user_provider_id = ? 
+		ORDER BY u.capability_tier ASC, u.model_id ASC`, userProviderID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +164,12 @@ func (r *ModelRepo) GetUserModelsByProvider(ctx context.Context, userProviderID 
 	var models []domain.UserModel
 	for rows.Next() {
 		var m domain.UserModel
-		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive); err != nil {
+		var releasedAt int64
+		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive, &m.VersionWeight, &m.IsLegacy, &releasedAt); err != nil {
 			return nil, err
+		}
+		if m.VersionWeight == 0 && releasedAt > 0 {
+			m.VersionWeight = int(releasedAt)
 		}
 		models = append(models, m)
 	}

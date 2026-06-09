@@ -151,6 +151,9 @@ func (m *Manager) Reload(ctx context.Context) error {
 			if sm, ok := globalSysModels[pm.ModelID]; ok {
 				isLegacy = sm.IsLegacy
 				versionWeight = sm.VersionWeight
+				if versionWeight == 0 && sm.ReleasedAt > 0 {
+					versionWeight = int(sm.ReleasedAt)
+				}
 			}
 			sysModelsMap[pm.ModelID][pm.ProviderID] = SysModelCacheInfo{
 				ActualModelID: pm.ActualModelID,
@@ -323,11 +326,24 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 // SelectBestChannelByTier 极简模式负载均衡：按能力梯队选最优渠道
 func (m *Manager) SelectBestChannelByTier(tier string) (*ActiveChannel, string, error) {
 	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, bool) {
-		for _, mod := range ch.Models {
+		var bestMod *domain.UserModel
+		for i := range ch.Models {
+			mod := &ch.Models[i]
 			if mod.CapabilityTier == tier && mod.IsActive {
-				info := m.resolveActualModelID(mod.ModelID, ch.Provider.ProviderID)
-				return info.ActualModelID, info, true
+				if bestMod == nil {
+					bestMod = mod
+				} else {
+					if bestMod.IsLegacy && !mod.IsLegacy {
+						bestMod = mod
+					} else if bestMod.IsLegacy == mod.IsLegacy && mod.VersionWeight > bestMod.VersionWeight {
+						bestMod = mod
+					}
+				}
 			}
+		}
+		if bestMod != nil {
+			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
+			return info.ActualModelID, info, true
 		}
 		return "", SysModelCacheInfo{}, false
 	})
@@ -345,11 +361,24 @@ func (m *Manager) SelectBestChannelByUserModelIDs(userModelIDs []int) (*ActiveCh
 	}
 
 	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, bool) {
-		for _, mod := range ch.Models {
+		var bestMod *domain.UserModel
+		for i := range ch.Models {
+			mod := &ch.Models[i]
 			if _, ok := idSet[mod.ID]; ok && mod.IsActive {
-				info := m.resolveActualModelID(mod.ModelID, ch.Provider.ProviderID)
-				return info.ActualModelID, info, true
+				if bestMod == nil {
+					bestMod = mod
+				} else {
+					if bestMod.IsLegacy && !mod.IsLegacy {
+						bestMod = mod
+					} else if bestMod.IsLegacy == mod.IsLegacy && mod.VersionWeight > bestMod.VersionWeight {
+						bestMod = mod
+					}
+				}
 			}
+		}
+		if bestMod != nil {
+			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
+			return info.ActualModelID, info, true
 		}
 		return "", SysModelCacheInfo{}, false
 	})

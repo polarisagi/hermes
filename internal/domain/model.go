@@ -36,6 +36,8 @@ type UserModel struct {
 	ModelID        string `json:"model_id"`
 	CapabilityTier string `json:"capability_tier"` // 主观标记该模型的梯队
 	IsActive       bool   `json:"is_active"`
+	VersionWeight  int    `json:"version_weight"`  // 继承自 sys_models，若为0则降级为 released_at
+	IsLegacy       bool   `json:"is_legacy"`       // 继承自 sys_models
 }
 
 // SysModelIntentDict 系统级路由意图字典（model_id → capability_tier，轻量路由专用）
