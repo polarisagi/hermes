@@ -18,13 +18,13 @@ func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvi
 		return nil
 
 	case domain.AuthTypeBearer:
-		if key := extractAPIKey(provider); key != "" {
+		if key := extractToken(provider); key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
 		return nil
 
 	case domain.AuthTypeHeader:
-		key := extractAPIKey(provider)
+		key := extractToken(provider)
 		headerName := ep.AuthHeader
 		if headerName == "" {
 			headerName = "x-api-key"
@@ -35,7 +35,7 @@ func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvi
 		return nil
 
 	case domain.AuthTypeQuery:
-		key := extractAPIKey(provider)
+		key := extractToken(provider)
 		if key != "" {
 			queryKey := ep.AuthHeader
 			if queryKey == "" {
@@ -48,6 +48,12 @@ func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvi
 		return nil
 
 	case domain.AuthTypeADC:
+		// 区分纯文本 Token 和 ADC JSON
+		// 如果用户在 adc_json 中填入了普通的 OAuth Token 或 API Key（非 JSON 结构）
+		if token := extractToken(provider); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+			return nil
+		}
 		// TODO: 实现 Google ADC OAuth token 置换
 		return errors.New("auth type adc not fully implemented yet")
 
@@ -57,14 +63,16 @@ func InjectAuth(_ context.Context, req *http.Request, provider *domain.UserProvi
 
 	default:
 		// 退化为 Bearer
-		if key := extractAPIKey(provider); key != "" {
+		if key := extractToken(provider); key != "" {
 			req.Header.Set("Authorization", "Bearer "+key)
 		}
 		return nil
 	}
 }
 
-func extractAPIKey(provider *domain.UserProvider) string {
+// extractToken 提取纯文本凭证（API Key 或 OAuth Token）
+// 优先从 api_key 字段提取，如果 adc_json 字段是不包含 '{' 的纯文本，也会将其作为 Token 提取
+func extractToken(provider *domain.UserProvider) string {
 	if provider == nil {
 		return ""
 	}
@@ -73,9 +81,14 @@ func extractAPIKey(provider *domain.UserProvider) string {
 		if key, ok := creds["api_key"].(string); ok && key != "" {
 			return key
 		}
+		if adc, ok := creds["adc_json"].(string); ok && adc != "" {
+			if !strings.HasPrefix(strings.TrimSpace(adc), "{") {
+				return adc
+			}
+		}
 	}
 	key := strings.TrimSpace(string(provider.AuthCredentials))
-	if key != "" && !strings.Contains(key, "{") {
+	if key != "" && !strings.HasPrefix(key, "{") {
 		return key
 	}
 	return ""

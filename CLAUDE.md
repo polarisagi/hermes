@@ -57,7 +57,7 @@ go build ./...          # 仅做编译检查
 **PolarisAGI Hermes** 是多协议 LLM API 代理网关，支持 OpenAI、Anthropic、Google Agent Platform 互转，提供负载均衡、熔断保护与用量计费，规避单账号速率限制。
 
 ### 请求处理流程
-1. HTTP 入口检测源协议 -> 2. 提取模型名 -> 3. Proxy 重试循环与节点抢占 -> 4. Auth 鉴权注入与 HTTP 发送 -> 5. 纯净协议转换 (TranslateRequest/Response) 与状态归还。
+1. HTTP 入口检测源协议 -> 2. 提取模型名 -> 3. Proxy 重试循环与节点抢占 -> 4. Auth 鉴权注入（支持智能提取 ADC JSON 与纯文本 API Key/Token）与 HTTP 发送 -> 5. 纯净协议转换 (TranslateRequest/Response) 与状态归还。
 
 ### 目录结构
 - `internal/app/`：依赖注入与应用生命周期

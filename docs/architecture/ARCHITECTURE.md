@@ -128,10 +128,11 @@ internal/translate/
       AuthTypeBearer   = "bearer"   // Authorization: Bearer <key>
       AuthTypeHeader   = "header"   // 自定义 Header，如 x-api-key
       AuthTypeQuery    = "query"    // URL 参数，如 ?key=xxx
-      AuthTypeADC      = "adc"      // Google ADC 令牌置换
+      AuthTypeADC      = "adc"      // Google ADC 令牌置换 / 纯文本 Token 退化机制
       AuthTypeAWSSigV4 = "aws_sigv4" // AWS 签名认证
   )
   ```
+- **智能 Token 提取机制**：网关在处理 `AuthTypeADC` 或其他鉴权时，会智能识别用户在 `adc_json` 等字段中填入的凭据类型。若提供的是完整的 Service Account JSON 格式文件，则走标准 ADC 流程（待实现）；若仅为一段非 JSON 的纯文本串（例如通过 UI 填入的 OAuth Access Token 或 API Key），则网关会自动退化并作为标准的 Bearer Token 或对应 Header 进行注入，实现无缝兼容。
 - **动态 UI 渲染**：前端管理面板不包含任何厂商字段的写死逻辑。UI 完全依据当前选定 Auth Mode 中的 `required_fields` 和 `auth_type`，自动渲染表单控件（如仅在选中 Agent Platform 时才显示 Project ID 和 Region 字段）。
 
 ### 4.3 双轨制模型映射引擎与多协议路由 (Pipeline)
