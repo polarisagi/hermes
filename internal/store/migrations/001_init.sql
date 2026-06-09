@@ -354,11 +354,6 @@ VALUES
 ('gemini-3.1-pro-preview-customtools','Gemini 3.1 Pro Preview Customtools','smart',2097152,65536,1,0,0,1,0.002,0.012,1772045923,1,0,0),
 ('gemini-3.1-flash',             'Gemini 3.1 Flash',             'fast',  1048576, 32768, 1,0,0,1, 0.0005,0.002, 1778168828, 1, 0, 0),
 ('gemini-3.1-flash-lite',        'Gemini 3.1 Flash Lite',        'fast',  1048576, 32768, 1,0,0,1, 0.00025,0.0015, 1778168828, 1, 0, 0),
--- ── Google Gemini 2.5 (2025 实际在用) ───────────────────────
-('gemini-2.5-pro',               'Gemini 2.5 Pro',               'smart', 2097152, 65536, 1,0,0,1, 0.00125,0.01, 1748995200, 1, 0, 0),
-('gemini-2.5-pro-preview',       'Gemini 2.5 Pro Preview',       'smart', 2097152, 65536, 1,0,0,1, 0.00125,0.01, 1748995200, 1, 0, 0),
-('gemini-2.5-flash',             'Gemini 2.5 Flash',             'fast',  1048576, 32768, 1,0,0,1, 0.0003,0.001, 1748995200, 1, 0, 0),
-('gemini-2.5-flash-preview',     'Gemini 2.5 Flash Preview',     'fast',  1048576, 32768, 1,0,0,1, 0.0003,0.001, 1748995200, 1, 0, 0),
 -- ── Google Gemini 2.0 ────────────────────────────────────────
 -- ── OpenAI GPT-5.x ──────────────────────────────────────────
 ('gpt-5.5-pro',                  'GPT-5.5 Pro',                  'smart', 128000,  16384, 1,0,0,1, 0.03,0.18, 1777051896, 1, 0, 0),
@@ -519,21 +514,6 @@ INSERT OR IGNORE INTO sys_provider_models (provider_id, model_id, actual_model_i
 ('opencode',                        'gemini-3.1-flash',                  'gemini-3.1-flash'),
 ('opencode',                        'gemini-3.1-flash-lite',             'gemini-3.1-flash-lite'),
 ('opencode',                        'gemini-3.5-flash',                  'gemini-3.5-flash'),
--- ── Google Gemini 2.5 ───────────────────────────────────────
-('google',                          'gemini-2.5-pro',                'gemini-2.5-pro'),
-('google',                          'gemini-2.5-pro-preview',        'gemini-2.5-pro-preview'),
-('google',                          'gemini-2.5-flash',              'gemini-2.5-flash'),
-('google',                          'gemini-2.5-flash-preview',      'gemini-2.5-flash-preview'),
-('custom_google',                   'gemini-2.5-pro',                'gemini-2.5-pro'),
-('custom_google',                   'gemini-2.5-pro-preview',        'gemini-2.5-pro-preview'),
-('custom_google',                   'gemini-2.5-flash',              'gemini-2.5-flash'),
-('custom_google',                   'gemini-2.5-flash-preview',      'gemini-2.5-flash-preview'),
-('gemini_enterprise_agent_platform','gemini-2.5-pro',                'gemini-2.5-pro'),
-('gemini_enterprise_agent_platform','gemini-2.5-pro-preview',        'gemini-2.5-pro-preview'),
-('gemini_enterprise_agent_platform','gemini-2.5-flash',              'gemini-2.5-flash'),
-('gemini_enterprise_agent_platform','gemini-2.5-flash-preview',      'gemini-2.5-flash-preview'),
-('opencode',                        'gemini-2.5-pro',                'gemini-2.5-pro'),
-('opencode',                        'gemini-2.5-flash',              'gemini-2.5-flash'),
 -- ── Google Gemini 2.0 ───────────────────────────────────────
 -- ── DeepSeek ────────────────────────────────────────────────
 ('deepseek',      'deepseek-v4-pro',    'deepseek-v4-pro'),
