@@ -298,7 +298,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// GEAP 动态前缀：OpenAI 端点需区分 anthropic/ 和 google/ 模型前缀
-		if targetProtocol == "openai" && targetEndpoint.ProviderID == "gemini_enterprise_agent_platform" {
+		if targetProtocol == "openai" && targetEndpoint.ProviderID == "agent_platform" {
 			if strings.HasPrefix(actualModel, "gemini-claude-") || strings.HasPrefix(actualModel, "claude-") {
 				actualModel = "anthropic/" + actualModel
 			} else {

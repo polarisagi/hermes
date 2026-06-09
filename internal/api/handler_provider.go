@@ -98,7 +98,7 @@ func (h *AdminHandler) HandleSysProviders(w http.ResponseWriter, r *http.Request
 
 // optimizeGoogleCredentials 自动判断用户的凭据是 API Key 还是 ADC JSON，并正确地放入对应字段
 func optimizeGoogleCredentials(p *domain.UserProvider) {
-	if p.ProviderID == "google" || p.ProviderID == "gemini_enterprise_agent_platform" {
+	if p.ProviderID == "google" || p.ProviderID == "agent_platform" {
 		var creds map[string]interface{}
 		if err := json.Unmarshal(p.AuthCredentials, &creds); err == nil {
 			changed := false
