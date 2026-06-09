@@ -245,7 +245,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 拦截处理 Anthropic token 统计请求
 	if clientProtocol == "anthropic" && strings.HasSuffix(path, "/count_tokens") {
 		skipBilling = true
-		tokens := billing.EstimatePromptTokens(bodyBytes)
+		tokens := billing.EstimateAnthropicTokens(bodyBytes)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"input_tokens": %d}`, tokens)
