@@ -36,10 +36,9 @@ func (t *GoogleToGoogleTranslator) TranslateRequest(
 		return nil, "", fmt.Errorf("invalid Gemini JSON: %w", err)
 	}
 
-	// 替换请求体中的模型名（body 中的 model 字段仅部分端点使用，但保持一致性）
-	if targetModel != "" {
-		gReq["model"] = targetModel
-	}
+	// 移除请求体中的 model 字段，因为 Vertex AI 严格校验它必须为完整路径，
+	// 而原生 Google API 和 Vertex AI 均可通过 URL Path 自动推断模型。
+	delete(gReq, "model")
 	newBodyBytes, _ := json.Marshal(gReq)
 
 	// 重建 URL 路径：替换路径中的模型名段

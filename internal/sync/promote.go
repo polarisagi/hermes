@@ -3,6 +3,9 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/polarisagi/hermes/internal/domain"
@@ -34,6 +37,13 @@ func NewPromoteService(
 	}
 }
 
+var familySuffixRe = regexp.MustCompile(`(?i)(-\d{4}-?\d{2}-?\d{2}|-\d{4}|:.*|-preview.*|-latest.*|-instruct.*|-chat.*|-vision.*)$`)
+
+func extractModelFamily(modelID string) string {
+	family := familySuffixRe.ReplaceAllString(modelID, "")
+	return strings.TrimSuffix(family, "-")
+}
+
 // PromoteAll 对所有 pending 记录执行晋升或拒绝
 func (p *PromoteService) PromoteAll(ctx context.Context) error {
 	promoted, rejected, pending := 0, 0, 0
@@ -42,21 +52,46 @@ func (p *PromoteService) PromoteAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// 按 Model Family 分组
+	familyGroups := make(map[string][]domain.ExternalModelCache)
 	for _, m := range models {
 		action, reason := p.classifyModel(&m)
-		switch action {
-		case "promote":
-			if err := p.promoteModel(ctx, &m); err != nil {
-				slog.Warn("[Promote] 模型晋升失败", "model_id", m.ModelID, "error", err)
-				continue
-			}
-			_ = p.extCacheRepo.MarkModelPromoted(ctx, m.ID)
-			promoted++
-		case "reject":
+		if action == "reject" {
 			_ = p.extCacheRepo.MarkModelRejected(ctx, m.ID, reason)
 			rejected++
-		default:
+			continue
+		}
+		if action == "pending" {
 			pending++
+			continue
+		}
+		
+		family := extractModelFamily(m.ModelID)
+		familyGroups[family] = append(familyGroups[family], m)
+	}
+
+	// 针对每个分组，按时间和权重降序排序，仅保留前2名
+	for _, group := range familyGroups {
+		sort.Slice(group, func(i, j int) bool {
+			if group[i].ReleasedAt != group[j].ReleasedAt {
+				return group[i].ReleasedAt > group[j].ReleasedAt
+			}
+			return group[i].ModelID > group[j].ModelID // Fallback to lexicographical descending (e.g. -20240806 > -20240513)
+		})
+
+		for i, m := range group {
+			if i < 2 {
+				if err := p.promoteModel(ctx, &m); err != nil {
+					slog.Warn("[Promote] 模型晋升失败", "model_id", m.ModelID, "error", err)
+					continue
+				}
+				_ = p.extCacheRepo.MarkModelPromoted(ctx, m.ID)
+				promoted++
+			} else {
+				_ = p.extCacheRepo.MarkModelRejected(ctx, m.ID, domain.RejectReasonOutdatedVersion)
+				rejected++
+			}
 		}
 	}
 

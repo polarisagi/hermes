@@ -55,7 +55,8 @@ const (
 
 // 拒绝原因常量
 const (
-	RejectReasonPre2025  = "pre_2025"
-	RejectReasonIsLegacy = "is_legacy"
-	RejectReasonNoTier   = "no_tier"
+	RejectReasonPre2025         = "pre_2025"
+	RejectReasonIsLegacy        = "is_legacy"
+	RejectReasonNoTier          = "no_tier"
+	RejectReasonOutdatedVersion = "outdated_version"
 )
