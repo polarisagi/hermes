@@ -363,12 +363,7 @@ VALUES
 ('gpt-5.3-codex',                'GPT-5.3 Codex',                'smart', 128000,  16384, 1,0,0,1, 0.00175,0.014, 1771959164, 1, 0, 0),
 ('gpt-5.2',                      'GPT-5.2',                      'smart', 128000,  16384, 1,0,0,1, 0.00175,0.014, 1768409315, 1, 0, 0),
 -- ── OpenAI GPT-4o / GPT-4 Turbo (Codex 常用) ────────────────
-('gpt-4o',                       'GPT-4o',                       'smart', 128000,  16384, 1,0,0,1, 0.0025,0.01, 1716854400, 1, 0, 0),
-('gpt-4o-mini',                  'GPT-4o Mini',                  'fast',  128000,  16384, 1,0,0,1, 0.00015,0.0006, 1721260800, 1, 0, 0),
 -- ── OpenAI o 系列 (Codex 思考模式) ──────────────────────────
-('o3',                           'o3',                           'smart', 200000, 100000, 1,0,0,1, 0.01,0.04, 1751500800, 1, 0, 0),
-('o3-mini',                      'o3 Mini',                      'fast',  128000,  65536, 1,0,0,1, 0.0011,0.0044, 1738195200, 1, 0, 0),
-('o4-mini',                      'o4 Mini',                      'fast',  200000, 100000, 1,0,0,1, 0.0011,0.0044, 1745366400, 1, 0, 0),
 -- ── DeepSeek ────────────────────────────────────────────────
 ('deepseek-v4-pro',              'DeepSeek V4 Pro',              'smart',  128000,  8192, 1,0,0,1, 0.000435,0.00087, 1777000679, 1, 0, 0),
 ('deepseek-v4-flash',            'DeepSeek V4 Flash',            'fast',   128000,  8192, 1,0,0,1, 0.00014,0.00028, 1777000666, 1, 0, 0),
@@ -474,21 +469,7 @@ INSERT OR IGNORE INTO sys_provider_models (provider_id, model_id, actual_model_i
 ('azure',         'gpt-5.3-codex',  'gpt-5.3-codex'),
 ('azure',         'gpt-5.2',        'gpt-5.2'),
 -- ── OpenAI GPT-4o / Turbo ───────────────────────────────────
-('openai',        'gpt-4o',              'gpt-4o'),
-('openai',        'gpt-4o-mini',         'gpt-4o-mini'),
-('custom_openai', 'gpt-4o',              'gpt-4o'),
-('custom_openai', 'gpt-4o-mini',         'gpt-4o-mini'),
-('github_copilot','gpt-4o',              'gpt-4o'),
-('github_copilot','gpt-4o-mini',         'gpt-4o-mini'),
-('azure',         'gpt-4o',              'gpt-4o'),
-('azure',         'gpt-4o-mini',         'gpt-4o-mini'),
 -- ── OpenAI o 系列 ────────────────────────────────────────────
-('openai',        'o3',      'o3'),
-('openai',        'o3-mini', 'o3-mini'),
-('openai',        'o4-mini', 'o4-mini'),
-('custom_openai', 'o3',      'o3'),
-('custom_openai', 'o3-mini', 'o3-mini'),
-('custom_openai', 'o4-mini', 'o4-mini'),
 -- ── Google Gemini 3.x ───────────────────────────────────────
 ('google',                          'gemini-3.5-flash',                  'gemini-3.5-flash'),
 ('google',                          'gemini-3.1-pro',                    'gemini-3.1-pro'),
