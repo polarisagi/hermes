@@ -62,3 +62,25 @@ func EstimateInputTokens(reqBody []byte) int {
 	}
 	return int(billing.EstimatePromptTokens(reqBody))
 }
+
+// WrapCompactText 用于 /compact 请求：如果生成的文本缺失 <summary>，自动补全外层结构
+func WrapCompactText(text string) string {
+	if !strings.Contains(text, "<summary>") {
+		return "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(text) + "\n</summary>"
+	}
+	return text
+}
+
+// FillMessageStartUsage 在 message_start 事件中填入预估的输入 Token，支持 /context 命令进度展示
+func FillMessageStartUsage(chunk map[string]interface{}, estimatedTokens int) {
+	if estimatedTokens <= 0 {
+		return
+	}
+	if msg, ok := chunk["message"].(map[string]interface{}); ok {
+		if usage, ok := msg["usage"].(map[string]interface{}); ok {
+			if it, _ := usage["input_tokens"].(float64); it == 0 {
+				usage["input_tokens"] = estimatedTokens
+			}
+		}
+	}
+}

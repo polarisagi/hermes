@@ -32,12 +32,18 @@ func handleDeepSeekNonStream(w http.ResponseWriter, r *http.Request, resp *http.
 						content["type"] = "compaction"
 						delete(content, "text")
 						
-						if !strings.Contains(text, "<summary>") {
-							text = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(text) + "\n</summary>"
-						}
+						text = anthr.WrapCompactText(text)
 						content["content"] = text
 					}
 				}
+			}
+		}
+	}
+
+	if usage, ok := aResp["usage"].(map[string]interface{}); ok {
+		if it, _ := usage["input_tokens"].(float64); it == 0 {
+			if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
+				usage["input_tokens"] = anthr.EstimateInputTokens(originalBody)
 			}
 		}
 	}
@@ -77,10 +83,7 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 			return
 		}
 		
-		finalText := compactTextBuf
-		if !strings.Contains(finalText, "<summary>") {
-			finalText = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(finalText) + "\n</summary>"
-		}
+		finalText := anthr.WrapCompactText(compactTextBuf)
 
 		writeEv("content_block_delta", map[string]interface{}{
 			"type": "content_block_delta", "index": compactBlockIndex,
@@ -112,14 +115,8 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 		eventType, _ := chunk["type"].(string)
 
-		if eventType == "message_start" && estimatedInputTokens > 0 {
-			if msg, ok := chunk["message"].(map[string]interface{}); ok {
-				if usage, ok := msg["usage"].(map[string]interface{}); ok {
-					if it, _ := usage["input_tokens"].(float64); it == 0 {
-						usage["input_tokens"] = estimatedInputTokens
-					}
-				}
-			}
+		if eventType == "message_start" {
+			anthr.FillMessageStartUsage(chunk, estimatedInputTokens)
 			writeEv("message_start", chunk)
 			continue
 		}

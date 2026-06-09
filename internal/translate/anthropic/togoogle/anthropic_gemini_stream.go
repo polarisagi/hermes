@@ -69,9 +69,8 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			},
 		})
 
-		finalText := compactTextBuf
-		if !strings.Contains(finalText, "<summary>") {
-			finalText = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(finalText) + "\n</summary>"
+		finalText := anthr.WrapCompactText(compactTextBuf)
+		if finalText != compactTextBuf {
 			slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全 (Stream)", "trace_id", traceID)
 		}
 

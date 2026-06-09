@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/hermes/internal/domain"
+	anthr "github.com/polarisagi/hermes/internal/translate/anthropic"
 )
 
 // handleAnthropicNonStreamResponse 处理 Google Agent Platform 非流式响应，提取文本和用量，转为 Anthropic JSON 格式返回
@@ -263,11 +264,11 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 	if isCompact && hasRealContent {
 		for i, c := range contents {
 			if c.Type == "text" {
-				if !strings.Contains(c.Text, "<summary>") {
-					cleanText := strings.TrimSpace(c.Text)
-					contents[i].Text = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + cleanText + "\n</summary>"
+				wrappedText := anthr.WrapCompactText(c.Text)
+				if wrappedText != c.Text {
 					slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全", "trace_id", traceID)
 				}
+				contents[i].Text = wrappedText
 				break // 只处理第一个 text 块
 			}
 		}

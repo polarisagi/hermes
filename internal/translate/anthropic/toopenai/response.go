@@ -55,10 +55,7 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 
 			if c, ok := msg["content"].(string); ok && c != "" {
 				if isCompact {
-					text := c
-					if !strings.Contains(text, "<summary>") {
-						text = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(text) + "\n</summary>"
-					}
+					text := anthr.WrapCompactText(c)
 					contents = append(contents, map[string]interface{}{
 						"type": "compaction",
 						"content": text,
@@ -127,6 +124,11 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 			outputTokens = int(ct)
 		}
 	}
+	if inputTokens == 0 {
+		if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
+			inputTokens = anthr.EstimateInputTokens(originalBody)
+		}
+	}
 
 	aResp := map[string]interface{}{
 		"id":            id,
@@ -193,10 +195,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 			"content_block": map[string]interface{}{"type": "compaction"},
 		})
 
-		finalText := compactTextBuf
-		if !strings.Contains(finalText, "<summary>") {
-			finalText = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(finalText) + "\n</summary>"
-		}
+		finalText := anthr.WrapCompactText(compactTextBuf)
 
 		writeEv("content_block_delta", map[string]interface{}{
 			"type": "content_block_delta", "index": blockIndex,
@@ -242,7 +241,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 		}
 
 		if !sentMessageStart {
-			writeEv("message_start", map[string]interface{}{
+			msgStartChunk := map[string]interface{}{
 				"type": "message_start",
 				"message": map[string]interface{}{
 					"id":      msgID,
@@ -250,9 +249,11 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 					"role":    "assistant",
 					"model":   targetModel,
 					"content": []interface{}{},
-					"usage":   map[string]int{"input_tokens": estimatedInputTokens, "output_tokens": 0},
+					"usage":   map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
 				},
-			})
+			}
+			anthr.FillMessageStartUsage(msgStartChunk, estimatedInputTokens)
+			writeEv("message_start", msgStartChunk)
 			sentMessageStart = true
 		}
 
@@ -415,15 +416,17 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 	}
 
 	if !sentMessageStart {
-		writeEv("message_start", map[string]interface{}{
+		msgStartChunk := map[string]interface{}{
 			"type": "message_start",
 			"message": map[string]interface{}{
 				"id": "msg_unknown", "type": "message",
 				"role": "assistant", "model": targetModel,
 				"content": []interface{}{},
-				"usage":   map[string]int{"input_tokens": 0, "output_tokens": 0},
+				"usage":   map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
 			},
-		})
+		}
+		anthr.FillMessageStartUsage(msgStartChunk, estimatedInputTokens)
+		writeEv("message_start", msgStartChunk)
 	}
 
 	writeEv("message_delta", map[string]interface{}{
