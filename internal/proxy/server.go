@@ -72,6 +72,36 @@ func detectPayloadProtocol(reqMap map[string]interface{}) string {
 	return ""
 }
 
+func extractModelName(r *http.Request, reqMap map[string]interface{}) string {
+	// 1. Check JSON body
+	if m, ok := reqMap["model"].(string); ok && m != "" {
+		return m
+	}
+
+	// 2. Check URL path (Google protocol usually has it in the URL)
+	path := r.URL.Path
+	if idx := strings.Index(path, "/models/"); idx != -1 {
+		modelPart := path[idx+len("/models/"):]
+		if colonIdx := strings.Index(modelPart, ":"); colonIdx != -1 {
+			return modelPart[:colonIdx]
+		}
+		if slashIdx := strings.Index(modelPart, "/"); slashIdx != -1 {
+			return modelPart[:slashIdx]
+		}
+		return modelPart
+	}
+
+	// 3. Check HTTP Headers (Fallback for some proxies/clients)
+	if m := r.Header.Get("X-Model"); m != "" {
+		return m
+	}
+	if m := r.Header.Get("X-Requested-Model"); m != "" {
+		return m
+	}
+
+	return ""
+}
+
 // targetPriority 协议优先级矩阵：给定客户端协议，优先选择哪种后端协议
 var targetPriority = map[string][]string{
 	"anthropic": {"anthropic", "google", "openai"},
@@ -225,10 +255,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var modelName string
-	if m, ok := reqMap["model"].(string); ok {
-		modelName = m
-	}
+	modelName := extractModelName(r, reqMap)
 
 	finalReqModel = modelName
 	finalReqBody = bodyBytes
