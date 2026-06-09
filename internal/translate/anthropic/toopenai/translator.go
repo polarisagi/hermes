@@ -85,9 +85,9 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 	stream := strings.Contains(resp.Header.Get("Content-Type"), "event-stream")
 
 	if stream {
-		handleStream(w, resp, kind)
+		handleStream(w, r, resp, kind)
 	} else {
-		handleNonStream(w, resp, kind)
+		handleNonStream(w, r, resp, kind)
 	}
 	return nil
 }

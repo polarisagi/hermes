@@ -17,7 +17,14 @@ import (
 //   - OpenAI 官方：message.content → text block（无 reasoning_content）
 //   - DeepSeek：message.reasoning_content → thinking block，message.content → text block
 //   - tool_calls：转为 Anthropic tool_use content blocks
-func handleNonStream(w http.ResponseWriter, resp *http.Response, kind translate.BackendKind) {
+func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response, kind translate.BackendKind) {
+	var isCompact bool
+	if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
+		var req anthr.MessageRequest
+		_ = json.Unmarshal(originalBody, &req)
+		isCompact = anthr.IsCompactRequest(&req)
+	}
+
 	body, _ := io.ReadAll(resp.Body)
 	var oResp map[string]interface{}
 	_ = json.Unmarshal(body, &oResp)
@@ -47,10 +54,21 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, kind translate.
 			}
 
 			if c, ok := msg["content"].(string); ok && c != "" {
-				contents = append(contents, map[string]interface{}{
-					"type": "text",
-					"text": c,
-				})
+				if isCompact {
+					text := c
+					if !strings.Contains(text, "<summary>") {
+						text = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(text) + "\n</summary>"
+					}
+					contents = append(contents, map[string]interface{}{
+						"type": "compaction",
+						"content": text,
+					})
+				} else {
+					contents = append(contents, map[string]interface{}{
+						"type": "text",
+						"text": c,
+					})
+				}
 			}
 
 			if tcs, ok := msg["tool_calls"].([]interface{}); ok && len(tcs) > 0 {
@@ -135,7 +153,16 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, kind translate.
 //   - delta.reasoning_content → thinking_delta（仅 DeepSeek）
 //   - delta.content           → text_delta
 //   - delta.tool_calls[i]     → 累积后 → tool_use block + input_json_delta
-func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.BackendKind) {
+func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, kind translate.BackendKind) {
+	var isCompact bool
+	var estimatedInputTokens int
+	if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
+		var req anthr.MessageRequest
+		_ = json.Unmarshal(originalBody, &req)
+		isCompact = anthr.IsCompactRequest(&req)
+		estimatedInputTokens = anthr.EstimateInputTokens(originalBody)
+	}
+
 	// 流式场景无法预先知道 model，从首个 chunk 中读取
 	targetModel := "unknown"
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -155,6 +182,31 @@ func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.Bac
 	inThinking := false
 	inText := false
 	stopReason := "end_turn"
+	var compactTextBuf string
+
+	flushCompactBuf := func() {
+		if compactTextBuf == "" {
+			return
+		}
+		writeEv("content_block_start", map[string]interface{}{
+			"type": "content_block_start", "index": blockIndex,
+			"content_block": map[string]interface{}{"type": "compaction"},
+		})
+
+		finalText := compactTextBuf
+		if !strings.Contains(finalText, "<summary>") {
+			finalText = "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(finalText) + "\n</summary>"
+		}
+
+		writeEv("content_block_delta", map[string]interface{}{
+			"type": "content_block_delta", "index": blockIndex,
+			"delta": map[string]interface{}{"type": "compaction_delta", "content": finalText},
+		})
+		
+		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
+		blockIndex++
+		compactTextBuf = ""
+	}
 
 	type toolCallAcc struct {
 		id        string
@@ -198,7 +250,7 @@ func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.Bac
 					"role":    "assistant",
 					"model":   targetModel,
 					"content": []interface{}{},
-					"usage":   map[string]int{"input_tokens": 0, "output_tokens": 0},
+					"usage":   map[string]int{"input_tokens": estimatedInputTokens, "output_tokens": 0},
 				},
 			})
 			sentMessageStart = true
@@ -259,6 +311,12 @@ func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.Bac
 				inThinking = false
 				blockIndex++
 			}
+			
+			if isCompact {
+				compactTextBuf += content
+				continue
+			}
+
 			if !inText {
 				writeEv("content_block_start", map[string]interface{}{
 					"type": "content_block_start", "index": blockIndex,
@@ -279,7 +337,9 @@ func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.Bac
 				inThinking = false
 				blockIndex++
 			}
-			if inText {
+			if isCompact && compactTextBuf != "" {
+				flushCompactBuf()
+			} else if inText {
 				writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 				inText = false
 				blockIndex++
@@ -339,7 +399,9 @@ func handleStream(w http.ResponseWriter, resp *http.Response, kind translate.Bac
 		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 		blockIndex++
 	}
-	if inText {
+	if isCompact && compactTextBuf != "" {
+		flushCompactBuf()
+	} else if inText {
 		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 		blockIndex++
 	}

@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -414,6 +415,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.chanManager.ReleaseChannel(activeChan)
 
 		// 6. 翻译响应
+		// 注入原始请求体到 context 中，供翻译器判断 isCompact 和预估 tokens
+		r = r.WithContext(context.WithValue(r.Context(), translate.OriginalReqBodyKey{}, reqBytesToTranslate))
+
 		// 官方 OpenAI：Responses API 直接透传，无需 Chat Completions → Responses API 包装
 		if isResponsesAPI && !isOpenAINative {
 			pr, pw := io.Pipe()

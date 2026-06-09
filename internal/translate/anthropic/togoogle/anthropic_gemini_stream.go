@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/polarisagi/hermes/internal/domain"
+	anthr "github.com/polarisagi/hermes/internal/translate/anthropic"
 )
 
 // streamAnthropicResponse 从 Vertex 后端读取流式 SSE 响应，边读边转为 Anthropic SSE 格式
@@ -33,7 +34,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 
 	// 用本地估算填充 message_start 的 input_tokens，让 /context 命令能在首事件就显示进度
 	// usageMetadata 抵达后，下方 message_delta 会以精确值覆盖
-	estimatedInput := estimateAnthropicTokens(req)
+	estimatedInput := estimateAnthropicTokens(req, reqBody)
 	writeSSEMessageStart(w, flusher, traceID, modelName, estimatedInput)
 
 	reader := bufio.NewReader(vertexResp.Body)
@@ -632,6 +633,6 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 	return true
 }
 
-func estimateAnthropicTokens(req MessageRequest) int {
-	return 0
+func estimateAnthropicTokens(req MessageRequest, reqBody []byte) int {
+	return anthr.EstimateInputTokens(reqBody)
 }

@@ -74,10 +74,31 @@ func (t *Translator) TranslateRequest(
 }
 
 func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
+	// 判断是否为 DeepSeek
+	isDeepSeek := false
+	if resp.Request != nil {
+		upstreamHost := strings.ToLower(resp.Request.URL.Host)
+		upstreamPath := strings.ToLower(resp.Request.URL.Path)
+		if strings.Contains(upstreamHost, "deepseek") || strings.Contains(upstreamPath, "deepseek") {
+			isDeepSeek = true
+		}
+	}
+
+	stream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+
+	if isDeepSeek {
+		if stream {
+			handleDeepSeekStream(w, r, resp)
+		} else {
+			handleDeepSeekNonStream(w, r, resp)
+		}
+		return nil
+	}
+
 	translate.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+	if stream {
 		translate.ForwardStreamBody(w, resp.Body)
 	} else {
 		_, _ = io.Copy(w, resp.Body)

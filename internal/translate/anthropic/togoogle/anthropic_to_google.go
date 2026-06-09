@@ -10,6 +10,7 @@ import (
 
 	"github.com/polarisagi/hermes/internal/domain"
 	"github.com/polarisagi/hermes/internal/translate"
+	anthr "github.com/polarisagi/hermes/internal/translate/anthropic"
 )
 
 const anthropicVersionGEAP = "vertex-2023-10-16"
@@ -67,43 +68,7 @@ func (t *Translator) TranslateRequest(
 	}
 	useGEAPClaude := isClaudeModel(finalModel)
 
-	isCompact := false
-	if len(req.Messages) > 0 {
-		lastMsg := req.Messages[len(req.Messages)-1]
-		if lastMsg.Role == "user" {
-			lastMsgBytes, _ := json.Marshal(lastMsg.Content)
-			lastMsgStr := string(lastMsgBytes)
-			features := 0
-			if strings.Contains(lastMsgStr, "TEXT ONLY") {
-				features++
-			}
-			if strings.Contains(strings.ToLower(lastMsgStr), "summary") {
-				features++
-			}
-			if strings.Contains(lastMsgStr, "Do NOT call any tools") {
-				features++
-			}
-			if strings.Contains(lastMsgStr, "<analysis>") {
-				features++
-			}
-			if strings.Contains(lastMsgStr, "<summary>") {
-				features++
-			}
-			if req.ContextManagement != nil {
-				for _, edit := range req.ContextManagement.Edits {
-					if strings.HasPrefix(edit.Type, "clear_thinking_") {
-						features++
-					}
-					if strings.HasPrefix(edit.Type, "compact_") {
-						features++
-					}
-				}
-			}
-			if features >= 2 {
-				isCompact = true
-			}
-		}
-	}
+	isCompact := anthr.IsCompactRequest(&req)
 
 	if isCompact {
 		req.Tools = nil
@@ -198,10 +163,18 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 		}
 	} else {
 		var req MessageRequest
+		var isCompact bool
+		var reqBody []byte
+		if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
+			reqBody = originalBody
+			_ = json.Unmarshal(originalBody, &req)
+			isCompact = anthr.IsCompactRequest(&req)
+		}
+
 		if stream {
-			streamAnthropicResponse(context.Background(), w, resp, req, "", nil, "Anthropic-Adapter", model, nil, false)
+			streamAnthropicResponse(context.Background(), w, resp, req, "", nil, "Anthropic-Adapter", model, reqBody, isCompact)
 		} else {
-			handleAnthropicNonStreamResponse(w, resp, req, "", nil, "Anthropic-Adapter", model, nil, false)
+			handleAnthropicNonStreamResponse(w, resp, req, "", nil, "Anthropic-Adapter", model, reqBody, isCompact)
 		}
 	}
 	return nil

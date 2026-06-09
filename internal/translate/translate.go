@@ -40,3 +40,6 @@ func (f *Factory) Register(key string, t Translator) {
 func (f *Factory) Get(key string) Translator {
 	return f.translators[key]
 }
+
+// OriginalReqBodyKey 用于在 context 中传递原始请求体的 key
+type OriginalReqBodyKey struct{}
