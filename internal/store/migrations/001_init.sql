@@ -484,7 +484,6 @@ INSERT OR IGNORE INTO sys_provider_models (provider_id, model_id, actual_model_i
 ('custom_google',                   'gemini-3.1-flash',                  'gemini-3.1-flash'),
 ('custom_google',                   'gemini-3.1-flash-lite',             'gemini-3.1-flash-lite'),
 ('agent_platform','gemini-3.5-flash',                  'gemini-3.5-flash'),
-('agent_platform','gemini-3.1-pro',                    'gemini-3.1-pro'),
 ('agent_platform','gemini-3.1-pro-preview',            'gemini-3.1-pro-preview'),
 ('agent_platform','gemini-3.1-pro-preview-customtools','gemini-3.1-pro-preview-customtools'),
 ('agent_platform','gemini-3.1-flash',                  'gemini-3.1-flash'),
