@@ -243,14 +243,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 拦截处理 Anthropic token 统计请求
+	// 本地拦截 count_tokens：不转发到任何后端，用程序计算直接返回
+	// 支持中文（CJK），格式符合 Anthropic count_tokens API 规范（Claude Code /context 所需）
 	if clientProtocol == "anthropic" && strings.HasSuffix(path, "/count_tokens") {
 		skipBilling = true
-		tokens := anthropic.EstimateTokens(bodyBytes)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"input_tokens": %d}`, tokens)
-		slog.Info("网关本地拦截 count_tokens 请求", "path", path, "estimated_tokens", tokens)
+		anthropic.HandleCountTokens(w, bodyBytes)
 		return
 	}
 

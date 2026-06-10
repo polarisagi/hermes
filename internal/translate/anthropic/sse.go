@@ -26,8 +26,9 @@ func WriteSSEMessageStart(w http.ResponseWriter, flusher http.Flusher, traceID, 
 			Type:    "message",
 			Role:    "assistant",
 			Content: []Content{},
-			Model:   modelName,
-			Usage:   Usage{InputTokens: estimatedInputTokens},
+			Model: modelName,
+			// output_tokens: 1 是 Anthropic SSE 协议的初始化标志，Claude Code 据此判断流已就绪
+			Usage: Usage{InputTokens: estimatedInputTokens, OutputTokens: 1},
 		},
 	})
 }

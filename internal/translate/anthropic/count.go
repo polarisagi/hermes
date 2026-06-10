@@ -7,25 +7,32 @@ import (
 	"github.com/polarisagi/hermes/internal/billing"
 )
 
-// EstimateTokens 本地估算 Anthropic Messages 请求的 input token 数
-// 使用 tiktoken 提供高精度的精确内存估算，支持内置工具、图片、多模态块的成本预估。
+// EstimateTokens 本地估算 Anthropic Messages 请求的 input token 数，完整支持中文（CJK）。
+//
+// 与官方 count_tokens API 对齐的估算策略：
+//   - 消息内容（可能含中文）使用 EstimateClaudeTokens，修正 o200k_base 对 CJK 的低估
+//   - Tool Schema（纯 ASCII JSON/XML）使用 EstimateCompletionTokens，无需修正
+//   - 每条消息固定 5 token 开销（role header + 分隔符），全局 10 token 对话容器开销
+//   - 图片/文档按 1500 token 固定成本（Anthropic 官方视觉定价）
+//   - thinking block 计入 signature 开销（thoughtSignature 可能极长）
 func EstimateTokens(bodyBytes []byte) int64 {
 	var req MessageRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		return billing.EstimatePromptTokens(bodyBytes) // fallback
 	}
 
-	var total int64 = 0
+	// 全局对话容器开销（<messages> 标签、BOS 等固定结构）
+	var total int64 = 10
 
 	// System prompt：支持字符串或内容块数组
 	switch sys := req.System.(type) {
 	case string:
-		total += billing.EstimateCompletionTokens(sys)
+		total += billing.EstimateClaudeTokens(sys)
 	case []interface{}:
 		for _, item := range sys {
 			if m, ok := item.(map[string]interface{}); ok {
 				if t, ok := m["text"].(string); ok {
-					total += billing.EstimateCompletionTokens(t)
+					total += billing.EstimateClaudeTokens(t)
 				}
 			}
 		}
@@ -33,9 +40,10 @@ func EstimateTokens(bodyBytes []byte) int64 {
 
 	// Messages
 	for _, msg := range req.Messages {
+		total += 5 // role header + 内容分隔符开销（Anthropic 格式约 5 token/消息）
 		switch v := msg.Content.(type) {
 		case string:
-			total += billing.EstimateCompletionTokens(v)
+			total += billing.EstimateClaudeTokens(v)
 		case []interface{}:
 			for _, item := range v {
 				m, ok := item.(map[string]interface{})
@@ -45,52 +53,58 @@ func EstimateTokens(bodyBytes []byte) int64 {
 				switch m["type"] {
 				case "text":
 					if t, ok := m["text"].(string); ok {
-						total += billing.EstimateCompletionTokens(t)
+						total += billing.EstimateClaudeTokens(t)
+					}
+				case "compaction":
+					if c, ok := m["content"].(string); ok {
+						total += billing.EstimateClaudeTokens(c)
 					}
 				case "image", "document":
+					// 官方 Anthropic 视觉定价：约 1500 token/图片
 					total += 1500
 				case "tool_use":
+					if name, ok := m["name"].(string); ok {
+						total += billing.EstimateClaudeTokens(name)
+					}
 					if input, ok := m["input"]; ok {
 						b, _ := json.Marshal(input)
+						// tool_use input 通常为 ASCII JSON，用通用估算即可
 						total += billing.EstimateCompletionTokens(string(b))
-					}
-					if name, ok := m["name"].(string); ok {
-						total += billing.EstimateCompletionTokens(name)
 					}
 				case "tool_result":
 					if c, ok := m["content"].(string); ok {
-						total += billing.EstimateCompletionTokens(c)
+						total += billing.EstimateClaudeTokens(c)
 					} else if arr, ok := m["content"].([]interface{}); ok {
 						for _, ci := range arr {
 							if cm, ok := ci.(map[string]interface{}); ok {
 								if t, ok := cm["text"].(string); ok {
-									total += billing.EstimateCompletionTokens(t)
+									total += billing.EstimateClaudeTokens(t)
 								}
 							}
 						}
 					}
 				case "thinking":
 					if t, ok := m["thinking"].(string); ok {
-						total += billing.EstimateCompletionTokens(t)
+						total += billing.EstimateClaudeTokens(t)
+					}
+					// thoughtSignature 通常是几百到几千字节的 base64，按字节估算
+					if sig, ok := m["signature"].(string); ok && sig != "" {
+						total += int64(len(sig)) / 4
 					}
 				case "redacted_thinking":
 					total += 50
-				case "compaction":
-					if c, ok := m["content"].(string); ok {
-						total += billing.EstimateCompletionTokens(c)
-					}
 				}
 			}
 		}
-		total += 4 // role 结构开销
 	}
 
-	// Tools: 通过严格的 XML 格式化来模拟 Anthropic 底层的 Tool 消耗
+	// Tools: 通过 XML 格式化模拟 Anthropic 底层的 Tool token 消耗
 	if len(req.Tools) > 0 {
-		toolXml := RenderToolsToXML(req.Tools)
-		total += billing.EstimateCompletionTokens(toolXml)
-		
-		// 对没有任何实际内容的 Tool 做低保 fallback
+		toolXML := RenderToolsToXML(req.Tools)
+		// Tool schema 为 ASCII，用通用估算
+		total += billing.EstimateCompletionTokens(toolXML)
+
+		// 没有实际 schema 的内置工具做低保 fallback
 		for _, tool := range req.Tools {
 			if tool.InputSchema == nil && tool.Type != "" && tool.Type != "custom" {
 				total += builtinToolTokenCost(tool.Type)
