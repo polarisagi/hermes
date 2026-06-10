@@ -81,9 +81,18 @@ func (t *Translator) TranslateRequest(
 		
 		if genCfg, ok := vReq["generationConfig"].(map[string]interface{}); ok {
 			genCfg["temperature"] = 0.0
+			// /compact 是纯文本摘要任务，不需要思考链。
+			// 若不禁用，Gemini 会把全部 token 用于 thinking，导致文本输出为空，
+			// compaction 块无法构建，Claude Code 报 "summarization produced empty response"
+			genCfg["thinkingConfig"] = map[string]interface{}{
+				"thinkingBudget": 0,
+			}
 		} else {
 			vReq["generationConfig"] = map[string]interface{}{
 				"temperature": 0.0,
+				"thinkingConfig": map[string]interface{}{
+					"thinkingBudget": 0,
+				},
 			}
 		}
 	}

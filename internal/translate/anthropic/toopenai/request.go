@@ -61,6 +61,11 @@ func buildOpenAIRequest(aReq *anthr.MessageRequest, targetModel string, kind tra
 		delete(oReq, "tools")
 		delete(oReq, "tool_choice")
 		oReq["temperature"] = 0.0
+		// /compact 是纯文本摘要任务，不需要思考链。
+		// 若不禁用，模型会把全部 token 用于 reasoning，导致文本输出为空
+		delete(oReq, "reasoning")          // OpenAI reasoning 参数
+		delete(oReq, "thinking")           // DeepSeek/其他兼容层 thinking 参数
+		delete(oReq, "reasoning_effort")   // DeepSeek reasoning_effort 参数
 	} else {
 		oReq["messages"] = buildOpenAIMessages(aReq)
 	}

@@ -77,6 +77,10 @@ func adaptForDeepSeek(req *anthr.MessageRequest) {
 		req.ToolChoice = nil
 		var temp float64 = 0.0
 		req.Temperature = &temp
+		// /compact 是纯文本摘要任务，不需要思考链。
+		// 若不禁用，DeepSeek 会把全部 token 用于 thinking，导致文本输出为空
+		req.Thinking = nil
+		req.OutputConfig = nil
 	} else {
 		req.Messages = filterMessagesForDeepSeek(req.Messages)
 	}
