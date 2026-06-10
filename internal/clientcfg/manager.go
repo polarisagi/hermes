@@ -25,9 +25,11 @@ type clientDef struct {
 	getInstallDir  func(home string) string
 	getConfigPath  func(home string) string
 	applyFn        func(home, listenAddr string) error
+	applyWithOptionsFn func(home, listenAddr string, opts map[string]string) error
 	isApplied      func(home, listenAddr string) bool
 	cleanFn        func(home, listenAddr string) error
 	getInjectedURL func(listenAddr string) string
+	getInjectedURLWithOptions func(listenAddr string, opts map[string]string) string
 }
 
 var allClients = []clientDef{
@@ -318,34 +320,60 @@ var allClients = []clientDef{
 		Name:          "opencode",
 		InstallDir:    ".config/opencode",
 		ConfigRelPath: ".config/opencode/opencode.json",
-		applyFn: func(home, listenAddr string) error {
+		applyWithOptionsFn: func(home, listenAddr string, opts map[string]string) error {
 			path := filepath.Join(home, ".config/opencode/opencode.json")
-			// 旧版本曾以自定义 provider "vertex"（npm: @ai-sdk/google，且未声明任何 models）误注入，
-			// 导致 OpenCode 模型列表中出现一个无可用模型的空 provider；现改为直接覆盖内置的
-			// "google-vertex" provider（models.dev 目录已自带模型定义），此处先清理遗留的旧条目。
-			removeStaleProviderEntry(path, "vertex")
-			return applyJSONConfig(
-				path,
-				map[string]any{
-					"provider": map[string]any{
-						"google-vertex": map[string]any{
-							"options": map[string]any{
-								"baseURL": "http://" + listenAddr + "/v1/google",
-								// 注入 apiKey 使 @ai-sdk/google-vertex 进入 "Express Mode"：
-								// 跳过 OAuth/ADC（GOOGLE_APPLICATION_CREDENTIALS）凭证查找，
-								// 否则用户本机若未配置 GCP 凭证，请求会在到达本网关前就失败。
-								"apiKey": polarisAPIKey,
-							},
-						},
-					},
+			protocol := "openai"
+			if p, ok := opts["protocol"]; ok && p != "" {
+				protocol = p
+			}
+			providerKey := protocol
+			if protocol == "google" {
+				providerKey = "google-vertex"
+			}
+
+			data, err := os.ReadFile(path)
+			var obj map[string]any
+			if err == nil {
+				_ = json.Unmarshal(data, &obj)
+			}
+			if obj == nil {
+				obj = make(map[string]any)
+			}
+			providers, _ := obj["provider"].(map[string]any)
+			if providers == nil {
+				providers = make(map[string]any)
+				obj["provider"] = providers
+			}
+			
+			// Clean any previously injected provider to avoid conflicts
+			for key, entryRaw := range providers {
+				if entry, ok := entryRaw.(map[string]any); ok {
+					if popts, ok := entry["options"].(map[string]any); ok {
+						url, _ := popts["baseURL"].(string)
+						apiKey, _ := popts["apiKey"].(string)
+						if strings.Contains(url, listenAddr) || strings.Contains(apiKey, polarisAPIKey) || key == "vertex" {
+							delete(providers, key)
+						}
+					}
+				}
+			}
+
+			providers[providerKey] = map[string]any{
+				"options": map[string]any{
+					"baseURL": "http://" + listenAddr + "/v1/" + protocol,
+					"apiKey":  polarisAPIKey,
 				},
-			)
+			}
+
+			out, _ := json.MarshalIndent(obj, "", "  ")
+			return atomicWriteFile(path, out, 0644)
 		},
 		isApplied: func(home, listenAddr string) bool {
-			expectedURL := "http://" + listenAddr + "/v1/google"
 			path := filepath.Join(home, ".config/opencode/opencode.json")
-			return isJSONConfiguredValue(path, "provider.google-vertex.options.baseURL", expectedURL) || 
-			       isJSONConfiguredValue(path, "provider.vertex.options.baseURL", expectedURL)
+			return isJSONConfiguredValue(path, "provider.google-vertex.options.baseURL", "http://"+listenAddr+"/v1/google") || 
+			       isJSONConfiguredValue(path, "provider.openai.options.baseURL", "http://"+listenAddr+"/v1/openai") ||
+			       isJSONConfiguredValue(path, "provider.anthropic.options.baseURL", "http://"+listenAddr+"/v1/anthropic") ||
+			       isJSONConfiguredValue(path, "provider.vertex.options.baseURL", "http://"+listenAddr+"/v1/google")
 		},
 		cleanFn: func(home, listenAddr string) error {
 			path := filepath.Join(home, ".config/opencode/opencode.json")
@@ -363,19 +391,14 @@ var allClients = []clientDef{
 				return nil
 			}
 			
-			expectedURL := "http://" + listenAddr + "/v1/google"
-			
-			if entry, ok := providers["google-vertex"].(map[string]any); ok {
-				if opts, ok := entry["options"].(map[string]any); ok {
-					if url, ok := opts["baseURL"].(string); ok && url == expectedURL {
-						delete(providers, "google-vertex")
-					}
-				}
-			}
-			if entry, ok := providers["vertex"].(map[string]any); ok {
-				if opts, ok := entry["options"].(map[string]any); ok {
-					if url, ok := opts["baseURL"].(string); ok && url == expectedURL {
-						delete(providers, "vertex")
+			for key, entryRaw := range providers {
+				if entry, ok := entryRaw.(map[string]any); ok {
+					if popts, ok := entry["options"].(map[string]any); ok {
+						url, _ := popts["baseURL"].(string)
+						apiKey, _ := popts["apiKey"].(string)
+						if strings.Contains(url, listenAddr) || strings.Contains(apiKey, polarisAPIKey) || key == "vertex" {
+							delete(providers, key)
+						}
 					}
 				}
 			}
@@ -384,6 +407,13 @@ var allClients = []clientDef{
 			return atomicWriteFile(path, out, 0644)
 		},
 		getInjectedURL: func(listenAddr string) string { return "http://" + listenAddr + "/v1/google" },
+		getInjectedURLWithOptions: func(listenAddr string, opts map[string]string) string {
+			protocol := "openai"
+			if p, ok := opts["protocol"]; ok && p != "" {
+				protocol = p
+			}
+			return "http://" + listenAddr + "/v1/" + protocol
+		},
 	},
 	{
 		Name:          "gemini_cli",
@@ -512,7 +542,7 @@ func (m *Manager) detectStatus(home, listenAddr string, def clientDef, backups m
 	return st
 }
 
-func (m *Manager) ApplyConfig(ctx context.Context, clientName string) error {
+func (m *Manager) ApplyConfig(ctx context.Context, clientName string, opts map[string]string) error {
 	def, ok := findClient(clientName)
 	if !ok {
 		return fmt.Errorf("不支持的客户端: %s", clientName)
@@ -536,12 +566,23 @@ func (m *Manager) ApplyConfig(ctx context.Context, clientName string) error {
 		return fmt.Errorf("无法创建配置目录: %w", err)
 	}
 
-	if err := m.backup(ctx, def.Name, configPath, def.getInjectedURL(listenAddr)); err != nil {
+	injectedURL := def.getInjectedURL(listenAddr)
+	if def.getInjectedURLWithOptions != nil {
+		injectedURL = def.getInjectedURLWithOptions(listenAddr, opts)
+	}
+
+	if err := m.backup(ctx, def.Name, configPath, injectedURL); err != nil {
 		slog.Warn("备份配置文件失败，继续写入", "client", def.Name, "error", err)
 	}
 
-	if err := def.applyFn(home, listenAddr); err != nil {
-		return fmt.Errorf("注入配置失败: %w", err)
+	if def.applyWithOptionsFn != nil {
+		if err := def.applyWithOptionsFn(home, listenAddr, opts); err != nil {
+			return fmt.Errorf("注入配置失败: %w", err)
+		}
+	} else {
+		if err := def.applyFn(home, listenAddr); err != nil {
+			return fmt.Errorf("注入配置失败: %w", err)
+		}
 	}
 
 	slog.Info("客户端代理配置注入成功", "client", def.Name, "config", configPath)

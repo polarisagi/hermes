@@ -18,7 +18,10 @@ export default {
                     ]);
                     if (statusRes.ok) {
                         const data = await statusRes.json();
-                        this.statuses = data.clients || [];
+                        this.statuses = (data.clients || []).map(c => {
+                            if (c.name === 'opencode') c.selectedProtocol = 'openai';
+                            return c;
+                        });
                     }
                     if (settingsRes.ok) {
                         const settings = await settingsRes.json();
@@ -43,10 +46,14 @@ export default {
 
                 this.applyingClient = clientName;
                 try {
+                    const payload = { client: clientName };
+                    if (clientName === 'opencode' && client && client.selectedProtocol) {
+                        payload.opts = { protocol: client.selectedProtocol };
+                    }
                     const res = await fetch('/api/admin/client_access/apply', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ client: clientName })
+                        body: JSON.stringify(payload)
                     });
                     if (res.ok) {
                         gStore.showToast(gStore.t('client_apply_success'), 'success');
@@ -257,6 +264,15 @@ export default {
 
                                     <!-- Actions -->
                                     <div class="flex items-center gap-2 flex-shrink-0">
+                                        <!-- Protocol Selector for opencode -->
+                                        <template x-if="client.name === 'opencode' && client.is_installed">
+                                            <select x-model="client.selectedProtocol" class="select select-bordered select-sm max-w-xs text-xs font-mono" :disabled="applyingClient === client.name">
+                                                <option value="openai" x-text="$store.global.lang === 'zh' ? 'OpenAI (推荐)' : 'OpenAI (Recommended)'"></option>
+                                                <option value="anthropic">Anthropic</option>
+                                                <option value="google">Google</option>
+                                            </select>
+                                        </template>
+
                                         <!-- Apply button -->
                                         <button
                                             @click="applyConfig(client.name)"

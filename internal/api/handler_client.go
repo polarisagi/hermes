@@ -21,13 +21,14 @@ func (h *AdminHandler) ApplyClientConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var payload struct {
-		Client string `json:"client"`
+		Client string            `json:"client"`
+		Opts   map[string]string `json:"opts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Client == "" {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if err := h.clientSvc.ApplyConfig(r.Context(), payload.Client); err != nil {
+	if err := h.clientSvc.ApplyConfig(r.Context(), payload.Client, payload.Opts); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
