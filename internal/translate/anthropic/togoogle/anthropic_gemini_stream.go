@@ -164,8 +164,12 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		}
 
 		data := bytes.TrimPrefix(line, []byte("data: "))
-		if string(data) == "[DONE]" {
+		dataStr := strings.TrimSpace(string(line[6:]))
+		if dataStr == "[DONE]" {
 			break
+		}
+		if isCompact {
+			slog.Info("🔍 [CompactDebug] RAW Stream Line", "trace_id", traceID, "data", dataStr[:min(len(dataStr), 500)])
 		}
 
 		var vResp map[string]interface{}
