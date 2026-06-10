@@ -100,11 +100,6 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 					if t, _ := cb["type"].(string); t == "text" {
 						inCompactBlock = true
 						compactBlockIndex, _ = chunk["index"].(float64)
-						
-						// Replace with compaction start
-						cb["type"] = "compaction"
-						delete(cb, "text")
-						writeEv(eventType, chunk)
 						continue
 					}
 				}

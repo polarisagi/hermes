@@ -112,29 +112,26 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			return
 		}
 
-		blockType := "text"
 		if isCompact {
-			blockType = "compaction"
+			compactManager.BufferText(fallbackTextBuf)
+			inText = true
+			fallbackTextBuf = ""
+			return
 		}
+
 		writeSSE(w, flusher, "content_block_start", StreamEvent{
 			Type:  "content_block_start",
 			Index: ptrInt(blockIndex),
 			ContentBlock: &Content{
-				Type: blockType,
+				Type: "text",
 			},
 		})
 		inText = true
 
-		var delta *Delta
-		if isCompact {
-			delta = &Delta{Type: "compaction_delta", Content: fallbackTextBuf}
-		} else {
-			delta = &Delta{Type: "text_delta", Text: fallbackTextBuf}
-		}
 		writeSSE(w, flusher, "content_block_delta", StreamEvent{
 			Type:  "content_block_delta",
 			Index: ptrInt(blockIndex),
-			Delta: delta,
+			Delta: &Delta{Type: "text_delta", Text: fallbackTextBuf},
 		})
 		fallbackTextBuf = ""
 	}
@@ -271,33 +268,24 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 						text = strings.TrimPrefix(fm, "Malformed function call: ")
 					}
 
-					if !inText {
-						blockType := "text"
-						if isCompact {
-							blockType = "compaction"
-						}
-						writeSSE(w, flusher, "content_block_start", StreamEvent{
-							Type:  "content_block_start",
-							Index: ptrInt(blockIndex),
-							ContentBlock: &Content{
-								Type: blockType,
-							},
-						})
-						inText = true
-					}
-					emittedText = true
-
-					var delta *Delta
 					if isCompact {
-						delta = &Delta{Type: "compaction_delta", Content: text}
+						compactManager.BufferText(text)
+						inText = true
 					} else {
-						delta = &Delta{Type: "text_delta", Text: text}
+						if !inText {
+							writeSSE(w, flusher, "content_block_start", StreamEvent{
+								Type:  "content_block_start",
+								Index: ptrInt(blockIndex),
+								ContentBlock: &Content{Type: "text"},
+							})
+							inText = true
+						}
+						writeSSE(w, flusher, "content_block_delta", StreamEvent{
+							Type:  "content_block_delta",
+							Index: ptrInt(blockIndex),
+							Delta: &Delta{Type: "text_delta", Text: text},
+						})
 					}
-					writeSSE(w, flusher, "content_block_delta", StreamEvent{
-						Type:  "content_block_delta",
-						Index: ptrInt(blockIndex),
-						Delta: delta,
-					})
 				}
 			default:
 				stopReason = "end_turn"
@@ -437,11 +425,12 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 						compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
 							writeSSE(w, flusher, eventType, data)
 						}, blockIndex)
+					} else {
+						writeSSE(w, flusher, "content_block_stop", StreamEvent{
+							Type:  "content_block_stop",
+							Index: ptrInt(blockIndex),
+						})
 					}
-					writeSSE(w, flusher, "content_block_stop", StreamEvent{
-						Type:  "content_block_stop",
-						Index: ptrInt(blockIndex),
-					})
 					inText = false
 					blockIndex++
 				}
@@ -573,8 +562,9 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
 				writeSSE(w, flusher, eventType, data)
 			}, blockIndex)
+		} else {
+			writeSSEContentBlockStop(w, flusher, blockIndex)
 		}
-		writeSSEContentBlockStop(w, flusher, blockIndex)
 	}
 	// message_delta：Anthropic 协议要求附带最终 stop_reason 与精确 usage
 	// Gemini 的 cachedContentTokenCount 映射成 cache_read_input_tokens，
