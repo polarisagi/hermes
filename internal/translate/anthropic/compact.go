@@ -358,15 +358,13 @@ func BuildCompactPrompt(req *MessageRequest) string {
 	systemPrompt := FlattenSystemPrompt(req.System)
 	return fmt.Sprintf(
 		"System Context: %s\n\n<conversation_history>\n%s\n</conversation_history>\n\n"+
-			"System Task: You are performing a context compaction. Please distill the conversation history above "+
-			"into a highly compressed, concise summary. Focus strictly on preserving critical facts, the user's "+
-			"main intent, important context, and any established rules or constraints. Discard all conversational "+
-			"fluff, routine tool outputs, and redundant steps.\n\n"+
-			"CRITICAL INSTRUCTIONS:\n"+
-			"1. You may use your internal reasoning/thinking capabilities if needed to process this large context.\n"+
-			"2. Your FINAL text output MUST strictly use this exact XML format and nothing else:\n"+
-			"<analysis>\n[Current task status, key technical decisions, and reasoning]\n</analysis>\n"+
-			"<summary>\n[Dense compressed summary preserving all critical context]\n</summary>",
+			"System Task: Context Compaction (Session State Summarization)\n"+
+			"Goal: Distill the entire conversation history into a dense, highly compressed summary that preserves critical facts, the user's intent, and established rules.\n\n"+
+			"CRITICAL CONSTRAINTS:\n"+
+			"1. FOCUS: Discard all conversational fluff, routine tool outputs, and redundant debugging steps. Extract ONLY the core architectural decisions and current project state.\n"+
+			"2. LENGTH & FORMAT: Your FINAL output must be as concise as possible and strictly adhere to the exact XML structure below. Do NOT output any text outside of these tags.\n\n"+
+			"<analysis>\n[Briefly state the current task status and the key technical decisions made]\n</analysis>\n"+
+			"<summary>\n[Dense, highly compressed summary preserving all critical context and constraints]\n</summary>",
 		systemPrompt, historyXML,
 	)
 }
