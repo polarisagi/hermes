@@ -134,6 +134,11 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 		}
 
 		// Write unhandled events directly
+		if isCompact && eventType == "message_delta" {
+			if delta, ok := chunk["delta"].(map[string]interface{}); ok {
+				delta["stop_reason"] = "compaction"
+			}
+		}
 		writeEv(eventType, chunk)
 	}
 

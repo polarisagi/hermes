@@ -594,6 +594,10 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 	if thinkingTokens > 0 {
 		outputTokensDetails = &OutputTokensDetails{ThinkingTokens: thinkingTokens}
 	}
+	if isCompact {
+		stopReason = "compaction"
+	}
+
 	msgDeltaEvent := StreamEvent{
 		Type: "message_delta",
 		Delta: &Delta{
