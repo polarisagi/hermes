@@ -321,6 +321,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		translatorKey := clientProtocol + "_" + targetProtocol
+		if targetProtocol == "anthropic" && translate.DetectBackend(activeChan.Provider, targetEndpoint) == translate.BackendDeepSeek {
+			translatorKey = clientProtocol + "_deepseek"
+		}
+
 		trans := s.transFactory.Get(translatorKey)
 		if trans == nil {
 			slog.Warn("未找到翻译器插件", "translator_key", translatorKey, "provider", activeChan.Provider.ProviderID)

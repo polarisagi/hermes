@@ -1,4 +1,4 @@
-package toanthropic
+package todeepseek
 
 import (
 	"bufio"

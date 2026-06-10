@@ -1,37 +1,23 @@
-// Package toanthropic 实现 Anthropic Messages API → Anthropic Messages API 的协议转换。
+// Package toanthropic 实现 Anthropic Messages API → Anthropic Messages API 的原生协议透传。
 //
-// 支持两种后端模式：
+// 此包专为真实的 Anthropic API（如 api.anthropic.com）设计。
+// 逻辑极其轻量：
+//  - 最小化改动透传：仅在 JSON bytes 层面无反序列化地替换 `model` 字段
+//  - 透传客户端携带的所有 Anthropic 专属 header（如 anthropic-version, anthropic-beta 等）
+//  - 响应内容通过 CopyHeaders 和 Write 直接透传回客户端
 //
-//  1. 真实 Anthropic API 后端（api.anthropic.com）
-//     → 最小化改动透传：只替换 model 名，原始字节直接转发
-//     → 透传客户端携带的所有 Anthropic 相关 header（anthropic-version、anthropic-beta 等）
-//     → 响应原样返回给 Claude Code 客户端
-//
-//  2. DeepSeek Anthropic 兼容接口（api.deepseek.com/anthropic）
-//     → 需要进行协议适配（DeepSeek 的 Anthropic 实现与官方存在差异）
-//     → 详见 adaptForDeepSeek() 注释
-//
-// DeepSeek Anthropic API 与官方 Anthropic API 的主要差异（2026年5月官方文档）：
-//   - thinking.type 只支持 "enabled"/"disabled"，不支持 "adaptive"（Claude 2026 新增）
-//   - budget_tokens 被忽略（DeepSeek 用 output_config.effort 控制强度）
-//   - 顶层 effort 字段不被识别，需转为 output_config: {effort: "high"/"max"}
-//   - redacted_thinking 不支持，历史消息中出现时需过滤
-//   - image、document 等多模态 content 不支持
-//   - context_management 等 Claude Code 专属字段需清理（DeepSeek 不识别会报错）
-//   - anthropic-beta header 被忽略（无害）
+// 对于 Anthropic 兼容协议（如 DeepSeek），应使用 `todeepseek` 包，
+// 它在网关层通过检测自动分发到该专用适配器。
 package toanthropic
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/polarisagi/hermes/internal/domain"
 	"github.com/polarisagi/hermes/internal/translate"
-	anthr "github.com/polarisagi/hermes/internal/translate/anthropic"
 )
 
 type Translator struct{}
@@ -47,57 +33,15 @@ func (t *Translator) TranslateRequest(
 	targetEndpoint *domain.SysAccessEndpoint,
 	targetModel string,
 ) ([]byte, string, error) {
-	isDeepSeek := detectDeepSeekBackend(provider, targetEndpoint)
-
-	var newBodyBytes []byte
-
-	if isDeepSeek {
-		var aReq anthr.MessageRequest
-		if err := json.Unmarshal(bodyBytes, &aReq); err != nil {
-			return nil, "", fmt.Errorf("invalid JSON payload: %w", err)
-		}
-		if targetModel != "" {
-			aReq.Model = targetModel
-		}
-		adaptForDeepSeek(&aReq)
-		newBodyBytes, _ = json.Marshal(aReq)
-		slog.Debug("[toanthropic] DeepSeek 模式：协议适配完成",
-			"model", aReq.Model,
-			"thinking_type", thinkingType(aReq.Thinking),
-			"output_config_effort", outputConfigEffort(aReq.OutputConfig),
-		)
-	} else {
-		newBodyBytes = replaceModelInRawJSON(bodyBytes, targetModel)
-	}
-
+	newBodyBytes := replaceModelInRawJSON(bodyBytes, targetModel)
 	return newBodyBytes, "/messages", nil
 }
 
 func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, resp *http.Response) error {
-	// 判断是否为 DeepSeek
-	isDeepSeek := false
-	if resp.Request != nil {
-		upstreamHost := strings.ToLower(resp.Request.URL.Host)
-		upstreamPath := strings.ToLower(resp.Request.URL.Path)
-		if strings.Contains(upstreamHost, "deepseek") || strings.Contains(upstreamPath, "deepseek") {
-			isDeepSeek = true
-		}
-	}
-
-	stream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
-
-	if isDeepSeek {
-		if stream {
-			handleDeepSeekStream(w, r, resp)
-		} else {
-			handleDeepSeekNonStream(w, r, resp)
-		}
-		return nil
-	}
-
 	translate.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-
+	
+	stream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 	if stream {
 		translate.ForwardStreamBody(w, resp.Body)
 	} else {
@@ -106,17 +50,19 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 	return nil
 }
 
-// ── 后端检测 ──────────────────────────────────────────────────────────────────
-
-// detectDeepSeekBackend 检测后端节点是否为 DeepSeek Anthropic 兼容接口
-func detectDeepSeekBackend(provider *domain.UserProvider, ep *domain.SysAccessEndpoint) bool {
-	if ep != nil {
-		if epURL := strings.ToLower(ep.DefaultBaseURL); strings.Contains(epURL, "deepseek") {
-			return true
-		}
+// replaceModelInRawJSON 在不完整解析整个 JSON 树的情况下替换 "model" 字段值，提升透传性能并保留未知字段。
+func replaceModelInRawJSON(body []byte, targetModel string) []byte {
+	if targetModel == "" {
+		return body
 	}
-	if providerID := strings.ToLower(provider.ProviderID); strings.Contains(providerID, "deepseek") {
-		return true
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return body
 	}
-	return false
+	raw["model"] = targetModel
+	result, err := json.Marshal(raw)
+	if err != nil {
+		return body
+	}
+	return result
 }

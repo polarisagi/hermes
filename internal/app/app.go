@@ -18,6 +18,7 @@ import (
 	"github.com/polarisagi/hermes/internal/store"
 	"github.com/polarisagi/hermes/internal/translate"
 	anthropic2anthropic "github.com/polarisagi/hermes/internal/translate/anthropic/toanthropic"
+	anthropic2deepseek "github.com/polarisagi/hermes/internal/translate/anthropic/todeepseek"
 	anthropic2google "github.com/polarisagi/hermes/internal/translate/anthropic/togoogle"
 	anthropic2openai "github.com/polarisagi/hermes/internal/translate/anthropic/toopenai"
 	google2anthropic "github.com/polarisagi/hermes/internal/translate/google/toanthropic"
@@ -95,6 +96,7 @@ func (a *App) Run() error {
 	transFactory.Register("anthropic_google", anthropic2google.NewTranslator())
 	transFactory.Register("anthropic_openai", anthropic2openai.NewTranslator())
 	transFactory.Register("anthropic_anthropic", anthropic2anthropic.NewTranslator())
+	transFactory.Register("anthropic_deepseek", anthropic2deepseek.NewTranslator())
 
 	// Google 入站
 	transFactory.Register("google_google", google2google.NewTranslator())

@@ -1,15 +1,12 @@
-package toanthropic
+package todeepseek
 
 import (
-	"encoding/json"
 	"log/slog"
 	"strings"
 
 	"github.com/polarisagi/hermes/internal/translate"
 	anthr "github.com/polarisagi/hermes/internal/translate/anthropic"
 )
-
-// ── DeepSeek 协议适配 ──────────────────────────────────────────────────────────
 
 // adaptForDeepSeek 将 Claude Code 发出的 Anthropic 请求适配为 DeepSeek Anthropic 兼容格式。
 //
@@ -152,7 +149,7 @@ func filterMessageContentForDeepSeek(msg anthr.Message) anthr.Message {
 			// 非工具调用轮：丢弃
 
 		case "image", "document":
-			slog.Warn("[toanthropic] DeepSeek 不支持的 content 类型，已过滤",
+			slog.Warn("[todeepseek] DeepSeek 不支持的 content 类型，已过滤",
 				"role", msg.Role,
 				"type", blk["type"],
 			)
@@ -171,25 +168,6 @@ func filterMessageContentForDeepSeek(msg anthr.Message) anthr.Message {
 
 	msg.Content = newBlocks
 	return msg
-}
-
-// ── 透传模式工具函数 ──────────────────────────────────────────────────────────
-
-// replaceModelInRawJSON 在不完整解析 JSON 的情况下替换 "model" 字段值
-func replaceModelInRawJSON(body []byte, targetModel string) []byte {
-	if targetModel == "" {
-		return body
-	}
-	var raw map[string]interface{}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return body
-	}
-	raw["model"] = targetModel
-	result, err := json.Marshal(raw)
-	if err != nil {
-		return body
-	}
-	return result
 }
 
 func thinkingType(t *anthr.ThinkingConfig) string {
