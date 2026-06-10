@@ -328,49 +328,215 @@ func FlattenSystemPrompt(sys interface{}) string {
 // 避免这些模型因无法处理 Anthropic 专属内容块（thinking、tool_result 等）而出错。
 // 目标模型返回的摘要文本将被 ProcessCompactNonStream 或 CompactStreamManager 转换为
 // 标准的 compaction content block 返回给 Claude Code。
+//
+// 提示词结构参照 Claude Code 官方源码（2.1.170），保持与官方 /compact 行为的一致性。
+//
+// 注意：tool_result 内容被完全跳过——工具原始输出（文件内容、命令输出等）
+// 极为冗长，直接喂给第三方模型会导致其原样复制这些内容到摘要中。
+// tool_use 只保留工具名与关键参数，第三方模型无法像 Claude 一样原生理解工具调用语义。
 func BuildCompactPrompt(req *MessageRequest) string {
 	var sb strings.Builder
+	var additionalInstructions string
+
 	for _, msg := range req.Messages {
 		sb.WriteString(fmt.Sprintf("<turn role=\"%s\">\n", msg.Role))
 		switch c := msg.Content.(type) {
 		case string:
+			// 从最后一条 user 消息提取自定义 compact 指令（来自 CLAUDE.md 的 ## Compact Instructions）
+			if msg.Role == "user" {
+				additionalInstructions = extractCompactInstructions(c)
+			}
 			sb.WriteString(c)
 		case []interface{}:
 			for _, block := range c {
 				if blk, ok := block.(map[string]interface{}); ok {
 					switch blk["type"] {
 					case "text", "compaction":
-						if t, ok := blk["text"].(string); ok && t != "" {
-							sb.WriteString(t)
+						var t string
+						if txt, ok := blk["text"].(string); ok && txt != "" {
+							t = txt
 						} else if ct, ok := blk["content"].(string); ok && ct != "" {
-							sb.WriteString(ct)
+							t = ct
 						}
+						if msg.Role == "user" && t != "" {
+							additionalInstructions = extractCompactInstructions(t)
+						}
+						sb.WriteString(t)
 					case "tool_use":
 						name, _ := blk["name"].(string)
-						input, _ := json.Marshal(blk["input"])
-						sb.WriteString(fmt.Sprintf("[Tool Use: %s, Args: %s]\n", name, string(input)))
+						// 只记录工具名和关键参数，避免完整 JSON 被模型原样抄写
+						if input, ok := blk["input"].(map[string]interface{}); ok {
+							if filePath, ok := input["file_path"].(string); ok {
+								sb.WriteString(fmt.Sprintf("[Tool: %s → %s]\n", name, filePath))
+							} else if cmd, ok := input["command"].(string); ok {
+								if len(cmd) > 80 {
+									cmd = cmd[:80] + "..."
+								}
+								sb.WriteString(fmt.Sprintf("[Tool: %s → %s]\n", name, cmd))
+							} else {
+								sb.WriteString(fmt.Sprintf("[Tool: %s]\n", name))
+							}
+						} else {
+							sb.WriteString(fmt.Sprintf("[Tool: %s]\n", name))
+						}
 					case "tool_result":
-						content, _ := json.Marshal(blk["content"])
-						sb.WriteString(fmt.Sprintf("[Tool Result: %s]\n", string(content)))
+						// 跳过：原始工具输出极为冗长，第三方模型会原样复制到摘要中。
+						// 上方的 tool_use 记录已足够让模型理解发生了什么操作。
 					}
 				}
 			}
 		}
 		sb.WriteString("\n</turn>\n")
 	}
+
 	historyXML := sb.String()
 	systemPrompt := FlattenSystemPrompt(req.System)
-	return fmt.Sprintf(
-		"System Context: %s\n\n<conversation_history>\n%s\n</conversation_history>\n\n"+
-			"System Task: Context Compaction (Session State Summarization)\n"+
-			"Goal: Distill the entire conversation history into a dense, highly compressed summary that preserves critical facts, the user's intent, and established rules.\n\n"+
-			"CRITICAL CONSTRAINTS:\n"+
-			"1. FOCUS: Discard all conversational fluff, routine tool outputs, and redundant debugging steps. Extract ONLY the core architectural decisions and current project state.\n"+
-			"2. SECURITY & CONSTRAINTS: Note any security-relevant instructions or constraints the user stated (e.g., sensitive files or data to avoid, operations that must not be performed). These MUST be preserved verbatim in the summary so they continue to apply after compaction.\n"+
-			"3. CODE DETAILS: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable and include a summary of why this file read or edit is important.\n"+
-			"4. LENGTH & FORMAT: Your FINAL output must be as concise as possible and strictly adhere to the exact XML structure below. Do NOT output any text outside of these tags.\n\n"+
-			"<analysis>\n[Chronologically analyze each message and section. Identify explicit requests, approaches, key decisions, errors and fixes.]\n</analysis>\n"+
-			"<summary>\n[Dense summary containing: Primary Request, Key Technical Concepts, Files and Code Sections, Pending Tasks, and Context for Continuing Work]\n</summary>",
-		systemPrompt, historyXML,
-	)
+
+	var systemSection string
+	if systemPrompt != "" {
+		systemSection = fmt.Sprintf("<system_context>\n%s\n</system_context>\n\n", systemPrompt)
+	}
+
+	const header = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
+- You already have all the context you need in the conversation above.
+- Tool calls will be REJECTED and will waste your only turn — you will fail the task.
+- Your entire response must be plain text: an <analysis> block followed by a <summary> block.
+
+`
+
+	const body = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
+
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+
+1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
+   - The user's explicit requests and intents
+   - Your approach to addressing the user's requests
+   - Key decisions, technical concepts and code patterns
+   - Specific details like:
+     - file names
+     - full code snippets
+     - function signatures
+     - file edits
+   - Errors that you ran into and how you fixed them
+   - Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
+   - Note any security-relevant instructions or constraints the user stated (e.g., sensitive files or data to avoid, operations that must not be performed, credential or secret handling rules). These MUST be preserved verbatim in the summary so they continue to apply after compaction.
+2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
+
+Your summary should include the following sections:
+
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Pay special attention to the most recent messages and include full code snippets where applicable and include a summary of why this file read or edit is important.
+4. Errors and fixes: List all errors that you ran into, and how you fixed them. Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
+5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
+6. All user messages: List ALL user messages that are not tool results. These are critical for understanding the users' feedback and changing intent. Preserve any security-relevant instructions or constraints verbatim so they remain in effect after compaction.
+7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
+8. Current Work: Describe in detail precisely what was being worked on immediately before this summary request, paying special attention to the most recent messages from both user and assistant. Include file names and code snippets where applicable.
+9. Optional Next Step: List the next step that you will take that is related to the most recent work you were doing. IMPORTANT: ensure that this step is DIRECTLY in line with the user's most recent explicit requests, and the task you were working on immediately before this summary request. If your last task was concluded, then only list next steps if they are explicitly in line with the users request. Do not start on tangential requests or really old requests that were already completed without confirming with the user first.
+                       If there is a next step, include direct quotes from the most recent conversation showing exactly what task you were working on and where you left off. This should be verbatim to ensure there's no drift in task interpretation.
+
+Here's an example of how your output should be structured:
+
+<example>
+<analysis>
+[Your thought process, ensuring all points are covered thoroughly and accurately]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detailed description]
+
+2. Key Technical Concepts:
+   - [Concept 1]
+   - [Concept 2]
+   - [...]
+
+3. Files and Code Sections:
+   - [File Name 1]
+      - [Summary of why this file is important]
+      - [Summary of the changes made to this file, if any]
+      - [Important Code Snippet]
+   - [File Name 2]
+      - [Important Code Snippet]
+   - [...]
+
+4. Errors and fixes:
+    - [Detailed description of error 1]:
+      - [How you fixed the error]
+      - [User feedback on the error if any]
+    - [...]
+
+5. Problem Solving:
+   [Description of solved problems and ongoing troubleshooting]
+
+6. All user messages:
+    - [Detailed non tool use user message]
+    - [...]
+
+7. Pending Tasks:
+   - [Task 1]
+   - [Task 2]
+   - [...]
+
+8. Current Work:
+   [Precise description of current work]
+
+9. Optional Next Step:
+   [Optional Next step to take]
+
+</summary>
+</example>
+
+Please provide your summary based on the conversation so far, following this structure and ensuring precision and thoroughness in your response.
+
+There may be additional summarization instructions provided in the included context. If so, remember to follow these instructions when creating the above summary. Examples of instructions include:
+<example>
+## Compact Instructions
+When summarizing the conversation focus on typescript code changes and also remember the mistakes you made and how you fixed them.
+</example>
+
+<example>
+# Summary instructions
+When you are using compact - please focus on test output and code changes. Include file reads verbatim.
+</example>
+`
+
+	const footer = "\nREMINDER: Do NOT call any tools. Respond with plain text only — an <analysis> block followed by a <summary> block. Tool calls will be rejected and you will fail the task."
+
+	prompt := systemSection +
+		"<conversation_history>\n" + historyXML + "\n</conversation_history>\n\n" +
+		header + body
+
+	if additionalInstructions != "" {
+		prompt += "\nAdditional Instructions:\n" + additionalInstructions
+	}
+	prompt += footer
+	return prompt
+}
+
+// extractCompactInstructions 从消息文本中提取用户自定义的 compact 指令。
+// Claude Code 会将 CLAUDE.md 中 "## Compact Instructions" 或 "# Summary instructions" 小节
+// 附加到 /compact 请求的最后一条 user 消息中。
+func extractCompactInstructions(text string) string {
+	markers := []string{"## Compact Instructions", "# Summary instructions", "## Summary instructions"}
+	for _, marker := range markers {
+		idx := strings.Index(text, marker)
+		if idx != -1 {
+			snippet := strings.TrimSpace(text[idx:])
+			// 取到下一个 ## 标题或文本结束
+			lines := strings.Split(snippet, "\n")
+			var result []string
+			for i, line := range lines {
+				if i > 0 && strings.HasPrefix(strings.TrimSpace(line), "##") {
+					break
+				}
+				result = append(result, line)
+			}
+			return strings.TrimSpace(strings.Join(result, "\n"))
+		}
+	}
+	return ""
 }
