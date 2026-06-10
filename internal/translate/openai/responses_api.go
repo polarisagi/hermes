@@ -53,6 +53,12 @@ func ResponsesAPIToChatCompletions(bodyBytes []byte, targetModel string, isDeepS
 		cReq["max_tokens"] = int(mot)
 	}
 
+	// truncation:"auto" → 网关内部标记，供下游 translator 判断是否需要 compact 处理。
+	// OpenAI 原生后端可直接处理此字段；非 OpenAI 后端（Google/DeepSeek）由 translator 实现等效压缩。
+	if truncation, ok := rReq["truncation"].(string); ok && truncation == "auto" {
+		cReq["__hermes_compact"] = true
+	}
+
 	if temp, ok := rReq["temperature"]; ok {
 		cReq["temperature"] = temp
 	}

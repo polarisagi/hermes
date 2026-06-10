@@ -27,6 +27,7 @@ import (
 
 	"github.com/polarisagi/hermes/internal/domain"
 	"github.com/polarisagi/hermes/internal/translate"
+	oai "github.com/polarisagi/hermes/internal/translate/openai"
 )
 
 // OpenAITranslator 实现 OpenAI → OpenAI 兼容后端的翻译器
@@ -108,6 +109,20 @@ func adaptForCompatBackend(body []byte, targetModel string, kind translate.Backe
 
 	// 移除 user 字段，防止 Codex 的随机 session id 破坏第三方模型（如 DeepSeek）的 cache 命中率
 	delete(req, "user")
+
+	// compact 检测：非官方 OpenAI 后端不支持 truncation:"auto"，由网关实现等效上下文压缩
+	if kind != translate.BackendOpenAI && oai.IsCompactRequestOpenAI(req) {
+		msgs, _ := req["messages"].([]interface{})
+		compactPrompt := oai.BuildCompactPromptFromOpenAI(msgs)
+		req["messages"] = []map[string]interface{}{{"role": "user", "content": compactPrompt}}
+		delete(req, "tools")
+		delete(req, "tool_choice")
+		delete(req, "__hermes_compact")
+		req["temperature"] = 0.0
+		result, _ := json.Marshal(req)
+		return result
+	}
+	delete(req, "__hermes_compact")
 
 	// max_completion_tokens → max_tokens（DeepSeek/通用不支持 max_completion_tokens）
 	if mct, ok := req["max_completion_tokens"]; ok {

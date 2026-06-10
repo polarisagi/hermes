@@ -85,6 +85,20 @@ func buildAnthropicRequest(oReq map[string]interface{}, targetModel string) (*an
 		}
 	}
 
+	// compact 检测：消息已转换为 Anthropic 格式，复用 anthr.BuildCompactPrompt 构建摘要请求。
+	// Anthropic 后端作为普通单轮请求处理，响应为普通文本，由 response.go 正常转换回 OpenAI 格式。
+	if openai.IsCompactRequestOpenAI(oReq) {
+		promptInjection := anthr.BuildCompactPrompt(aReq)
+		aReq.Messages = []anthr.Message{{Role: "user", Content: promptInjection}}
+		aReq.System = nil
+		aReq.Tools = nil
+		aReq.ToolChoice = nil
+		aReq.Thinking = nil
+		aReq.Effort = ""
+		var temp float64 = 0.0
+		aReq.Temperature = &temp
+	}
+
 	return aReq, nil
 }
 

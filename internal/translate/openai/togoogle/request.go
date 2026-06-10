@@ -12,6 +12,18 @@ import (
 func buildGeminiRequest(oReq map[string]interface{}, model string) map[string]interface{} {
 	gReq := make(map[string]interface{})
 
+	// compact 检测：将 OpenAI messages 压缩为单条摘要请求，不向 Gemini 传递工具定义
+	if openai.IsCompactRequestOpenAI(oReq) {
+		msgs, _ := oReq["messages"].([]interface{})
+		compactPrompt := openai.BuildCompactPromptFromOpenAI(msgs)
+		gReq["contents"] = []map[string]interface{}{{
+			"role":  "user",
+			"parts": []map[string]interface{}{{"text": compactPrompt}},
+		}}
+		gReq["generationConfig"] = map[string]interface{}{"temperature": 0.0}
+		return gReq
+	}
+
 	// 消息转换（需先收集 tool ID→name 映射，供 tool result 使用）
 	msgs, _ := oReq["messages"].([]interface{})
 	contents, sysInstruction := convertMessages(msgs)
