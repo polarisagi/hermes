@@ -240,6 +240,7 @@ type CompactStreamManager struct {
 
 // BufferText 向缓冲区追加文本（流式接收到的每个文本分片）
 func (m *CompactStreamManager) BufferText(text string) {
+	slog.Info("🔍 [CompactDebug] BufferText 追加文本", "trace_id", m.TraceID, "length", len(text), "text_preview", text[:min(len(text), 100)])
 	m.compactTextBuf += text
 }
 
@@ -261,8 +262,10 @@ func (m *CompactStreamManager) HasData() bool {
 //   - blockIndex: 当前内容块的索引
 func (m *CompactStreamManager) Flush(writeSSEFunc func(eventType string, data interface{}), blockIndex int) {
 	if m.compactTextBuf == "" {
+		slog.Warn("⚠️ [CompactDebug] Flush 被调用但缓冲区为空，无法发出 compaction 块！", "trace_id", m.TraceID)
 		return
 	}
+	slog.Info("🔍 [CompactDebug] Flush 开始发出 compaction 块", "trace_id", m.TraceID, "total_length", len(m.compactTextBuf))
 
 	finalText := WrapCompactText(m.compactTextBuf)
 	if finalText != m.compactTextBuf {

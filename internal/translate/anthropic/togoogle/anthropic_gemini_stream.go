@@ -239,6 +239,11 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			}
 		}
 
+		if isCompact {
+			candJSON, _ := json.Marshal(cand)
+			slog.Info("🔍 [CompactDebug] Gemini Stream Cand", "trace_id", traceID, "cand", string(candJSON))
+		}
+
 		if finishReason, ok := cand["finishReason"].(string); ok && finishReason != "" {
 			switch finishReason {
 			case "MAX_TOKENS":
