@@ -366,9 +366,11 @@ func BuildCompactPrompt(req *MessageRequest) string {
 			"Goal: Distill the entire conversation history into a dense, highly compressed summary that preserves critical facts, the user's intent, and established rules.\n\n"+
 			"CRITICAL CONSTRAINTS:\n"+
 			"1. FOCUS: Discard all conversational fluff, routine tool outputs, and redundant debugging steps. Extract ONLY the core architectural decisions and current project state.\n"+
-			"2. LENGTH & FORMAT: Your FINAL output must be as concise as possible and strictly adhere to the exact XML structure below. Do NOT output any text outside of these tags.\n\n"+
-			"<analysis>\n[Briefly state the current task status and the key technical decisions made]\n</analysis>\n"+
-			"<summary>\n[Dense, highly compressed summary preserving all critical context and constraints]\n</summary>",
+			"2. SECURITY & CONSTRAINTS: Note any security-relevant instructions or constraints the user stated (e.g., sensitive files or data to avoid, operations that must not be performed). These MUST be preserved verbatim in the summary so they continue to apply after compaction.\n"+
+			"3. CODE DETAILS: Enumerate specific files and code sections examined, modified, or created. Include full code snippets where applicable and include a summary of why this file read or edit is important.\n"+
+			"4. LENGTH & FORMAT: Your FINAL output must be as concise as possible and strictly adhere to the exact XML structure below. Do NOT output any text outside of these tags.\n\n"+
+			"<analysis>\n[Chronologically analyze each message and section. Identify explicit requests, approaches, key decisions, errors and fixes.]\n</analysis>\n"+
+			"<summary>\n[Dense summary containing: Primary Request, Key Technical Concepts, Files and Code Sections, Pending Tasks, and Context for Continuing Work]\n</summary>",
 		systemPrompt, historyXML,
 	)
 }
