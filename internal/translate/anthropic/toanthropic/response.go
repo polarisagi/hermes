@@ -25,18 +25,7 @@ func handleDeepSeekNonStream(w http.ResponseWriter, r *http.Request, resp *http.
 
 	if isCompact {
 		if contents, ok := aResp["content"].([]interface{}); ok {
-			for _, contentRaw := range contents {
-				if content, ok := contentRaw.(map[string]interface{}); ok {
-					if t, _ := content["type"].(string); t == "text" {
-						text, _ := content["text"].(string)
-						content["type"] = "compaction"
-						delete(content, "text")
-						
-						text = anthr.WrapCompactText(text)
-						content["content"] = text
-					}
-				}
-			}
+			anthr.ProcessCompactNonStream(contents)
 		}
 	}
 
@@ -70,29 +59,12 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 	flusher, _ := w.(http.Flusher)
 	reader := bufio.NewReader(resp.Body)
 
-	var compactTextBuf string
+	compactManager := &anthr.CompactStreamManager{}
 	var inCompactBlock bool
 	var compactBlockIndex float64
 
 	writeEv := func(eventType string, data interface{}) {
 		anthr.WriteSSE(w, flusher, eventType, data)
-	}
-
-	flushCompactBuf := func() {
-		if !inCompactBlock {
-			return
-		}
-		
-		finalText := anthr.WrapCompactText(compactTextBuf)
-
-		writeEv("content_block_delta", map[string]interface{}{
-			"type": "content_block_delta", "index": compactBlockIndex,
-			"delta": map[string]interface{}{"type": "compaction_delta", "content": finalText},
-		})
-		
-		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": compactBlockIndex})
-		inCompactBlock = false
-		compactTextBuf = ""
 	}
 
 	for {
@@ -140,7 +112,7 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 				if inCompactBlock {
 					if delta, ok := chunk["delta"].(map[string]interface{}); ok {
 						if text, ok := delta["text"].(string); ok {
-							compactTextBuf += text
+							compactManager.BufferText(text)
 							// Buffer it instead of sending
 							continue
 						}
@@ -148,12 +120,14 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 				}
 			case "content_block_stop":
 				if inCompactBlock && chunk["index"].(float64) == compactBlockIndex {
-					flushCompactBuf()
+					compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
+					inCompactBlock = false
 					continue
 				}
 			case "message_delta", "message_stop":
 				if inCompactBlock {
-					flushCompactBuf()
+					compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
+					inCompactBlock = false
 				}
 			}
 		}
@@ -163,6 +137,6 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	if inCompactBlock {
-		flushCompactBuf()
+		compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
 	}
 }

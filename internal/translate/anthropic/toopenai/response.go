@@ -54,18 +54,10 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 			}
 
 			if c, ok := msg["content"].(string); ok && c != "" {
-				if isCompact {
-					text := anthr.WrapCompactText(c)
-					contents = append(contents, map[string]interface{}{
-						"type": "compaction",
-						"content": text,
-					})
-				} else {
-					contents = append(contents, map[string]interface{}{
-						"type": "text",
-						"text": c,
-					})
-				}
+				contents = append(contents, map[string]interface{}{
+					"type": "text",
+					"text": c,
+				})
 			}
 
 			if tcs, ok := msg["tool_calls"].([]interface{}); ok && len(tcs) > 0 {
@@ -130,6 +122,10 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 		}
 	}
 
+	if isCompact {
+		anthr.ProcessCompactNonStream(contents)
+	}
+
 	aResp := map[string]interface{}{
 		"id":            id,
 		"type":          "message",
@@ -184,28 +180,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 	inThinking := false
 	inText := false
 	stopReason := "end_turn"
-	var compactTextBuf string
-
-	flushCompactBuf := func() {
-		if compactTextBuf == "" {
-			return
-		}
-		writeEv("content_block_start", map[string]interface{}{
-			"type": "content_block_start", "index": blockIndex,
-			"content_block": map[string]interface{}{"type": "compaction"},
-		})
-
-		finalText := anthr.WrapCompactText(compactTextBuf)
-
-		writeEv("content_block_delta", map[string]interface{}{
-			"type": "content_block_delta", "index": blockIndex,
-			"delta": map[string]interface{}{"type": "compaction_delta", "content": finalText},
-		})
-		
-		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
-		blockIndex++
-		compactTextBuf = ""
-	}
+	compactManager := &anthr.CompactStreamManager{}
 
 	type toolCallAcc struct {
 		id        string
@@ -312,9 +287,8 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 				inThinking = false
 				blockIndex++
 			}
-			
 			if isCompact {
-				compactTextBuf += content
+				compactManager.BufferText(content)
 				continue
 			}
 
@@ -338,8 +312,9 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 				inThinking = false
 				blockIndex++
 			}
-			if isCompact && compactTextBuf != "" {
-				flushCompactBuf()
+			if isCompact && compactManager.HasData() {
+				compactManager.Flush(w, flusher, writeEv, blockIndex)
+				blockIndex++
 			} else if inText {
 				writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 				inText = false
@@ -400,8 +375,9 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 		blockIndex++
 	}
-	if isCompact && compactTextBuf != "" {
-		flushCompactBuf()
+	if isCompact && compactManager.HasData() {
+		compactManager.Flush(w, flusher, writeEv, blockIndex)
+		blockIndex++
 	} else if inText {
 		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 		blockIndex++

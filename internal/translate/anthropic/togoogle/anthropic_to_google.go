@@ -68,38 +68,7 @@ func (t *Translator) TranslateRequest(
 
 	vReq, _ := mapToVertexRequest(req, finalModel)
 	if isCompact {
-		var sb strings.Builder
-		for _, msg := range req.Messages {
-			sb.WriteString(fmt.Sprintf("<turn role=\"%s\">\n", msg.Role))
-			switch c := msg.Content.(type) {
-			case string:
-				sb.WriteString(c)
-			case []interface{}:
-				for _, block := range c {
-					if blk, ok := block.(map[string]interface{}); ok {
-						switch blk["type"] {
-						case "text", "compaction":
-							if t, ok := blk["text"].(string); ok && t != "" {
-								sb.WriteString(t)
-							} else if ct, ok := blk["content"].(string); ok && ct != "" {
-								sb.WriteString(ct)
-							}
-						case "tool_use":
-							name, _ := blk["name"].(string)
-							sb.WriteString(fmt.Sprintf("[tool_use: %s]", name))
-						case "tool_result":
-							if ct, ok := blk["content"].(string); ok && ct != "" {
-								sb.WriteString(fmt.Sprintf("[tool_result: %s]", ct))
-							}
-						}
-					}
-				}
-			}
-			sb.WriteString("\n</turn>\n")
-		}
-		historyXML := sb.String()
-		systemPrompt := flattenAnthropicSystem(req.System)
-		promptInjection := fmt.Sprintf("System Context: %s\n\n<conversation_history>\n%s\n</conversation_history>\n\nSystem Task: You are performing a context compaction.", systemPrompt, historyXML)
+		promptInjection := anthr.BuildCompactPrompt(&req)
 
 		vReq["contents"] = []map[string]interface{}{{
 			"role":  "user",
@@ -107,6 +76,15 @@ func (t *Translator) TranslateRequest(
 		}}
 		delete(vReq, "systemInstruction")
 		delete(vReq, "tools")
+		delete(vReq, "toolConfig")
+		
+		if genCfg, ok := vReq["generationConfig"].(map[string]interface{}); ok {
+			genCfg["temperature"] = 0.0
+		} else {
+			vReq["generationConfig"] = map[string]interface{}{
+				"temperature": 0.0,
+			}
+		}
 	}
 
 	vReqBytes, _ := json.Marshal(vReq)
@@ -188,24 +166,4 @@ func nonStreamGEAPClaude(w http.ResponseWriter, upstreamResp *http.Response) {
 	_, _ = w.Write(bodyBytes)
 }
 
-func flattenAnthropicSystem(sys interface{}) string {
-	if sys == nil {
-		return ""
-	}
-	switch v := sys.(type) {
-	case string:
-		return v
-	case []interface{}:
-		var sb strings.Builder
-		for _, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				if t, ok := m["text"].(string); ok {
-					sb.WriteString(t)
-					sb.WriteString("\n")
-				}
-			}
-		}
-		return strings.TrimSpace(sb.String())
-	}
-	return ""
-}
+

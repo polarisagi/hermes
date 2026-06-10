@@ -69,7 +69,21 @@ func adaptForDeepSeek(req *anthr.MessageRequest) {
 		req.OutputConfig = &anthr.OutputConfig{Effort: "high"}
 	}
 
-	req.Messages = filterMessagesForDeepSeek(req.Messages)
+	if anthr.IsCompactRequest(req) {
+		promptInjection := anthr.BuildCompactPrompt(req)
+		req.Messages = []anthr.Message{{
+			Role:    "user",
+			Content: promptInjection,
+		}}
+		req.System = nil
+		req.Tools = nil
+		req.ToolChoice = nil
+		var temp float64 = 0.0
+		req.Temperature = &temp
+	} else {
+		req.Messages = filterMessagesForDeepSeek(req.Messages)
+	}
+	
 	req.ContextManagement = nil
 }
 

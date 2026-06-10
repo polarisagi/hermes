@@ -262,16 +262,7 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 		}
 	}
 	if isCompact && hasRealContent {
-		for i, c := range contents {
-			if c.Type == "text" {
-				wrappedText := anthr.WrapCompactText(c.Text)
-				if wrappedText != c.Text {
-					slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全", "trace_id", traceID)
-				}
-				contents[i].Text = wrappedText
-				break // 只处理第一个 text 块
-			}
-		}
+		anthr.ProcessCompactNonStream(contents)
 	}
 
 	if !hasRealContent {

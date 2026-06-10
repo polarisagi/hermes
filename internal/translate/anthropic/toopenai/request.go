@@ -52,7 +52,19 @@ func buildOpenAIRequest(aReq *anthr.MessageRequest, targetModel string, kind tra
 		}
 	}
 
-	oReq["messages"] = buildOpenAIMessages(aReq)
+	if anthr.IsCompactRequest(aReq) {
+		promptInjection := anthr.BuildCompactPrompt(aReq)
+		oReq["messages"] = []map[string]interface{}{{
+			"role":    "user",
+			"content": promptInjection,
+		}}
+		delete(oReq, "tools")
+		delete(oReq, "tool_choice")
+		oReq["temperature"] = 0.0
+	} else {
+		oReq["messages"] = buildOpenAIMessages(aReq)
+	}
+
 	return oReq
 }
 

@@ -50,37 +50,13 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 	stopReason := "end_turn"
 	var matchedStopSeq string // 触发停止的序列（Gemini 不直接返回，通过文本尾部推断）
 	var streamError string    // 流中途出错信息
-	var compactTextBuf string // 用于 /compact 模式下缓冲完整文本
+
+	compactManager := &anthr.CompactStreamManager{TraceID: traceID}
 
 	fallbackPrefix := "[Assistant called tool '"
 	fallbackPrefixXML := "<past_tool_execution "
 	var fallbackTextBuf string
 	var isBufferingFallback bool
-
-	flushCompactBuf := func() {
-		if compactTextBuf == "" {
-			return
-		}
-		writeSSE(w, flusher, "content_block_start", StreamEvent{
-			Type:  "content_block_start",
-			Index: ptrInt(blockIndex),
-			ContentBlock: &Content{
-				Type: "text",
-			},
-		})
-
-		finalText := anthr.WrapCompactText(compactTextBuf)
-		if finalText != compactTextBuf {
-			slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全 (Stream)", "trace_id", traceID)
-		}
-
-		writeSSE(w, flusher, "content_block_delta", StreamEvent{
-			Type:  "content_block_delta",
-			Index: ptrInt(blockIndex),
-			Delta: &Delta{Type: "text_delta", Text: finalText},
-		})
-		compactTextBuf = ""
-	}
 
 	flushFallbackBuffer := func() {
 		if !isBufferingFallback {
@@ -411,7 +387,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 					emittedText = true
 
 					if isCompact {
-						compactTextBuf += text
+						compactManager.BufferText(text)
 						inText = true // 标记为 inText，让收尾逻辑触发 content_block_stop
 						continue
 					}
@@ -458,7 +434,9 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 				}
 				if inText {
 					if isCompact {
-						flushCompactBuf()
+						compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
+							writeSSE(w, flusher, eventType, data)
+						}, blockIndex)
 					}
 					writeSSE(w, flusher, "content_block_stop", StreamEvent{
 						Type:  "content_block_stop",
@@ -592,7 +570,9 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 	}
 	if inText {
 		if isCompact {
-			flushCompactBuf()
+			compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
+				writeSSE(w, flusher, eventType, data)
+			}, blockIndex)
 		}
 		writeSSEContentBlockStop(w, flusher, blockIndex)
 	}
