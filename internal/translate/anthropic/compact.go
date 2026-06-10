@@ -361,8 +361,11 @@ func BuildCompactPrompt(req *MessageRequest) string {
 			"System Task: You are performing a context compaction. Please distill the conversation history above "+
 			"into a highly compressed, concise summary. Focus strictly on preserving critical facts, the user's "+
 			"main intent, important context, and any established rules or constraints. Discard all conversational "+
-			"fluff, routine tool outputs, and redundant steps. Output MUST use this format:\n"+
-			"<analysis>\n[Current task status and key technical decisions]\n</analysis>\n"+
+			"fluff, routine tool outputs, and redundant steps.\n\n"+
+			"CRITICAL INSTRUCTIONS:\n"+
+			"1. You may use your internal reasoning/thinking capabilities if needed to process this large context.\n"+
+			"2. Your FINAL text output MUST strictly use this exact XML format and nothing else:\n"+
+			"<analysis>\n[Current task status, key technical decisions, and reasoning]\n</analysis>\n"+
 			"<summary>\n[Dense compressed summary preserving all critical context]\n</summary>",
 		systemPrompt, historyXML,
 	)

@@ -322,6 +322,15 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 				}
 
 				if thinkText, ok := part["text"].(string); ok && thinkText != "" {
+					if isCompact {
+						// /compact 模式下，拦截模型输出的思考内容，将其作为最终 summary 的素材合并缓冲，
+						// 从而避免发送 thinking_delta 导致 Claude Code 客户端发生 400 错误
+						compactManager.BufferText(thinkText)
+						inText = true
+						emittedText = true
+						continue
+					}
+
 					// 有正文块打开时先关闭（thinking 必须排在 text 之前）
 					if inText {
 						writeSSEContentBlockStop(w, flusher, blockIndex)

@@ -97,7 +97,9 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 			switch eventType {
 			case "content_block_start":
 				if cb, ok := chunk["content_block"].(map[string]interface{}); ok {
-					if t, _ := cb["type"].(string); t == "text" {
+					t, _ := cb["type"].(string)
+					// 拦截 text 和 thinking 块
+					if t == "text" || t == "thinking" {
 						inCompactBlock = true
 						compactBlockIndex, _ = chunk["index"].(float64)
 						continue
@@ -108,7 +110,11 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 					if delta, ok := chunk["delta"].(map[string]interface{}); ok {
 						if text, ok := delta["text"].(string); ok {
 							compactManager.BufferText(text)
-							// Buffer it instead of sending
+							continue
+						}
+						// 拦截 thinking_delta
+						if thinking, ok := delta["thinking"].(string); ok {
+							compactManager.BufferText(thinking)
 							continue
 						}
 					}

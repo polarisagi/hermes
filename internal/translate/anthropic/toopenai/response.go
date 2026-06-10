@@ -269,6 +269,13 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 
 		// reasoning_content → thinking block（所有后端都可能返回，包括 DeepSeek、OpenAI GPT-5.x）
 		if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+			if isCompact {
+				// /compact 模式下，拦截思考内容，不发射 thinking 块
+				compactManager.BufferText(rc)
+				inText = true
+				continue
+			}
+
 			if inText {
 				writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
 				inText = false
