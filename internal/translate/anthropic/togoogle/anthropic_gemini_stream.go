@@ -168,9 +168,6 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		if dataStr == "[DONE]" {
 			break
 		}
-		if isCompact {
-			slog.Info("🔍 [CompactDebug] RAW Stream Line", "trace_id", traceID, "data", dataStr[:min(len(dataStr), 500)])
-		}
 
 		var vResp map[string]interface{}
 		if err := json.Unmarshal(data, &vResp); err != nil {
@@ -241,11 +238,6 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			if streamError != "" {
 				break
 			}
-		}
-
-		if isCompact {
-			candJSON, _ := json.Marshal(cand)
-			slog.Info("🔍 [CompactDebug] Gemini Stream Cand", "trace_id", traceID, "cand", string(candJSON))
 		}
 
 		if finishReason, ok := cand["finishReason"].(string); ok && finishReason != "" {

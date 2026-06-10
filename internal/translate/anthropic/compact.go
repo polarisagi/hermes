@@ -240,7 +240,7 @@ type CompactStreamManager struct {
 
 // BufferText 向缓冲区追加文本（流式接收到的每个文本分片）
 func (m *CompactStreamManager) BufferText(text string) {
-	slog.Info("🔍 [CompactDebug] BufferText 追加文本", "trace_id", m.TraceID, "length", len(text), "text_preview", text[:min(len(text), 100)])
+	slog.Debug("🔍 [Compact] BufferText 追加文本", "trace_id", m.TraceID, "length", len(text))
 	m.compactTextBuf += text
 }
 
@@ -262,14 +262,14 @@ func (m *CompactStreamManager) HasData() bool {
 //   - blockIndex: 当前内容块的索引
 func (m *CompactStreamManager) Flush(writeSSEFunc func(eventType string, data interface{}), blockIndex int) {
 	if m.compactTextBuf == "" {
-		slog.Warn("⚠️ [CompactDebug] Flush 被调用但缓冲区为空，无法发出 compaction 块！", "trace_id", m.TraceID)
+		slog.Warn("⚠️ [Compact] Flush 被调用但缓冲区为空，无法发出 compaction 块！", "trace_id", m.TraceID)
 		return
 	}
-	slog.Info("🔍 [CompactDebug] Flush 开始发出 compaction 块", "trace_id", m.TraceID, "total_length", len(m.compactTextBuf))
+	slog.Debug("🔍 [Compact] Flush 开始发出 compaction 块", "trace_id", m.TraceID, "total_length", len(m.compactTextBuf))
 
 	finalText := WrapCompactText(m.compactTextBuf)
 	if finalText != m.compactTextBuf {
-		slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全 (Stream)", "trace_id", m.TraceID)
+		slog.Debug("🔍 [Compact] /compact 响应缺失 <summary> 标签，网关已自动补全 (Stream)", "trace_id", m.TraceID)
 	}
 
 	writeSSEFunc("content_block_start", map[string]interface{}{
