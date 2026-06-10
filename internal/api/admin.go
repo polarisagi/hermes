@@ -276,6 +276,12 @@ func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/debug", h.SetDebug)
 	mux.HandleFunc("/api/admin/oauth/google/start", h.StartGoogleOAuth)
 	mux.HandleFunc("/api/admin/oauth/google/callback", h.CallbackGoogleOAuth)
+
+	// MCP Management
+	mux.HandleFunc("/api/admin/mcp/registry", h.ListMCPRegistry)
+	mux.HandleFunc("/api/admin/mcp/installed", h.ListInstalledMCP)
+	mux.HandleFunc("/api/admin/mcp/install", h.InstallMCP)
+	mux.HandleFunc("/api/admin/mcp/uninstall", h.UninstallMCP)
 }
 
 // AutoImportNodeModels 触发为特定 Node 自动导入模型

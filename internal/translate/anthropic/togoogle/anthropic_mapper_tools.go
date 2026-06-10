@@ -1,6 +1,7 @@
 package togoogle
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -272,6 +273,7 @@ func sanitizeSchema(schema map[string]interface{}) map[string]interface{} {
 	convertOneOfToAnyOf(result)
 	inferMissingType(result)
 	enforceVertexTypeConstraints(result)
+	convertEnumToStrings(result)
 
 	return result
 }
@@ -413,5 +415,14 @@ func enforceVertexTypeConstraints(result map[string]interface{}) {
 				result["type"] = "NULL"
 			}
 		}
+	}
+}
+func convertEnumToStrings(result map[string]interface{}) {
+	if enumArr, ok := result["enum"].([]interface{}); ok {
+		cleanArr := make([]interface{}, 0, len(enumArr))
+		for _, item := range enumArr {
+			cleanArr = append(cleanArr, fmt.Sprintf("%v", item))
+		}
+		result["enum"] = cleanArr
 	}
 }

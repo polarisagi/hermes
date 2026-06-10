@@ -80,7 +80,18 @@ var allClients = []clientDef{
 		applyFn: func(home, listenAddr string) error {
 			// 写入 .claude.json 跳过初次安装确认，允许无账号用户直接使用
 			claudeJsonPath := filepath.Join(home, ".claude.json")
-			_ = applyJSONConfig(claudeJsonPath, map[string]any{"hasCompletedOnboarding": true})
+			needsOnboardingInjection := true
+			if data, err := os.ReadFile(claudeJsonPath); err == nil {
+				var obj map[string]any
+				if err := json.Unmarshal(data, &obj); err == nil {
+					if val, ok := obj["hasCompletedOnboarding"].(bool); ok && val {
+						needsOnboardingInjection = false
+					}
+				}
+			}
+			if needsOnboardingInjection {
+				_ = applyJSONConfig(claudeJsonPath, map[string]any{"hasCompletedOnboarding": true})
+			}
 
 			return applyJSONConfig(
 				filepath.Join(home, ".claude/settings.json"),
@@ -105,11 +116,13 @@ var allClients = []clientDef{
 			if data, err := os.ReadFile(claudeJsonPath); err == nil {
 				var obj map[string]any
 				if err := json.Unmarshal(data, &obj); err == nil {
-					if val, ok := obj["hasCompletedOnboarding"].(bool); ok && val {
-						delete(obj, "hasCompletedOnboarding")
-						if len(obj) == 0 {
-							_ = os.Remove(claudeJsonPath)
-						} else {
+					_, hasOauth := obj["oauthAccount"]
+					_, hasUserID := obj["userID"]
+					
+					// 只有在用户没有登录的情况下，才删除这个参数
+					if !hasOauth && !hasUserID {
+						if val, ok := obj["hasCompletedOnboarding"].(bool); ok && val {
+							delete(obj, "hasCompletedOnboarding")
 							out, _ := json.MarshalIndent(obj, "", "  ")
 							_ = atomicWriteFile(claudeJsonPath, out, 0644)
 						}
