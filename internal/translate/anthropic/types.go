@@ -2,6 +2,8 @@
 // 该包作为共享协议层，被 togoogle、toopenai 等子翻译器共同引用。
 package anthropic
 
+import "encoding/json"
+
 // MessageRequest 对应 Anthropic Messages API 请求体
 type MessageRequest struct {
 	Model    string    `json:"model"`
@@ -85,8 +87,9 @@ type ContextEdit struct {
 	Trigger              *ContextEditTrigger `json:"trigger,omitempty"`
 	Instructions         string              `json:"instructions,omitempty"`
 	PauseAfterCompaction bool                `json:"pause_after_compaction,omitempty"`
-	Keep                 *ContextEditKeep    `json:"keep,omitempty"`
-	Strategy             string              `json:"strategy,omitempty"` // 兼容旧格式
+	// Keep 兼容字符串（Claude Code 旧格式："keep":"last_n"）和对象（官方新格式：{"type":"tool_uses","value":3}）
+	Keep     json.RawMessage `json:"keep,omitempty"`
+	Strategy string          `json:"strategy,omitempty"` // 兼容旧格式
 }
 
 // ContextEditTrigger 触发阈值配置（type 固定为 "input_tokens"）
@@ -95,7 +98,7 @@ type ContextEditTrigger struct {
 	Value int    `json:"value"` // 触发阈值 token 数（官方最低要求 50000）
 }
 
-// ContextEditKeep 保留策略配置
+// ContextEditKeep 保留策略配置（官方新格式，实际 keep 字段用 json.RawMessage 接收）
 type ContextEditKeep struct {
 	Type  string `json:"type"`  // "tool_uses" | "thinking_turns"
 	Value int    `json:"value"` // 保留数量
