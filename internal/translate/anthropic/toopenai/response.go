@@ -106,7 +106,7 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 		}
 	}
 
-	if isCompact && anthr.HasRealContentMapSlice(contents) {
+	if isCompact {
 		anthr.ProcessCompactNonStream(contents)
 	}
 
@@ -128,10 +128,6 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 		if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
 			inputTokens = anthr.EstimateInputTokens(originalBody)
 		}
-	}
-
-	if isCompact {
-		anthr.ProcessCompactNonStream(contents)
 	}
 
 	aResp := map[string]interface{}{
