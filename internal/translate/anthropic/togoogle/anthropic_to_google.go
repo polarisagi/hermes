@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -121,8 +122,17 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 		var reqBody []byte
 		if originalBody, ok := r.Context().Value(translate.OriginalReqBodyKey{}).([]byte); ok {
 			reqBody = originalBody
-			_ = json.Unmarshal(originalBody, &req)
+			if err := json.Unmarshal(originalBody, &req); err != nil {
+				slog.Warn("⚠️ [CompactDetect] 原始请求体解析失败，compact 检测降级为仅文本特征",
+					"error", err.Error(),
+					"body_preview", string(originalBody[:min(len(originalBody), 200)]))
+			}
 			isCompact = anthr.IsCompactRequest(&req)
+			slog.Info("🔍 [CompactDetect] 请求类型判断",
+				"is_compact", isCompact,
+				"has_context_mgmt", req.ContextManagement != nil,
+				"msg_count", len(req.Messages),
+			)
 		}
 
 		if stream {
