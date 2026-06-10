@@ -18,15 +18,14 @@ func EstimateTokens(bodyBytes []byte) int64 {
 	var total int64 = 0
 
 	// System prompt：支持字符串或内容块数组
-	// Anthropic 的 system prompt 中往往包含大量的 XML（如 Claude Code 的 Memory files, System tools），tiktoken 会低估，给予 1.2x 补偿系数
 	switch sys := req.System.(type) {
 	case string:
-		total += int64(float64(billing.EstimateCompletionTokens(sys)) * 1.2)
+		total += billing.EstimateCompletionTokens(sys)
 	case []interface{}:
 		for _, item := range sys {
 			if m, ok := item.(map[string]interface{}); ok {
 				if t, ok := m["text"].(string); ok {
-					total += int64(float64(billing.EstimateCompletionTokens(t)) * 1.2)
+					total += billing.EstimateCompletionTokens(t)
 				}
 			}
 		}
@@ -86,40 +85,94 @@ func EstimateTokens(bodyBytes []byte) int64 {
 		total += 4 // role 结构开销
 	}
 
-	// Tools
-	for _, tool := range req.Tools {
-		// 动态计算真实的消耗：只要客户端传了内容，就实打实地算
-		// Anthropic 对于 Tool 的 token 消耗非常大（底层转换为繁重的 XML），加上内置的基础消耗
-		var toolCost int64 = 150 // Base overhead per tool
-		if tool.Name != "" {
-			toolCost += billing.EstimateCompletionTokens(tool.Name)
-		}
-		if tool.Description != "" {
-			toolCost += billing.EstimateCompletionTokens(tool.Description)
-		}
-		if tool.InputSchema != nil {
-			// 使用带格式的 JSON 进行预估，并且给 schema 一个较大的系数，以拟合 Anthropic 将其转换为 XML 时的真实消耗
-			b, _ := json.MarshalIndent(tool.InputSchema, "", "  ")
-			if string(b) != "{}" && string(b) != "{\n}" {
-				toolCost += int64(float64(billing.EstimateCompletionTokens(string(b))) * 2.5)
+	// Tools: 通过严格的 XML 格式化来模拟 Anthropic 底层的 Tool 消耗
+	if len(req.Tools) > 0 {
+		toolXml := RenderToolsToXML(req.Tools)
+		total += billing.EstimateCompletionTokens(toolXml)
+		
+		// 对没有任何实际内容的 Tool 做低保 fallback
+		for _, tool := range req.Tools {
+			if tool.InputSchema == nil && tool.Type != "" && tool.Type != "custom" {
+				total += builtinToolTokenCost(tool.Type)
 			}
 		}
-
-		// 只有在客户端完全没有提供 Schema 的情况下（纯依赖后端隐式注入的 Built-in Tool），
-		// 我们才 Fallback 到官方经验值的硬编码估算。
-		if tool.InputSchema == nil && tool.Type != "" && tool.Type != "custom" {
-			toolCost += builtinToolTokenCost(tool.Type)
-		}
-
-		// 对于没有任何内容的空白 tool fallback 给个低保（防止除零或异常）
-		if toolCost < 150 {
-			toolCost = 150
-		}
-
-		total += toolCost
 	}
 
 	return total
+}
+
+// RenderToolsToXML 将 JSON Schema 转换为类似 Anthropic 底层的 XML 结构，以实现精准的 Token 估算。
+func RenderToolsToXML(tools []Tool) string {
+	var sb strings.Builder
+	sb.WriteString("<tools>\n")
+	for _, tool := range tools {
+		if tool.Type == "custom" || tool.Type == "" {
+			sb.WriteString("<tool_description>\n")
+			sb.WriteString("<tool_name>")
+			sb.WriteString(tool.Name)
+			sb.WriteString("</tool_name>\n")
+			sb.WriteString("<description>\n")
+			sb.WriteString(tool.Description)
+			sb.WriteString("\n</description>\n")
+			sb.WriteString("<parameters>\n")
+			if tool.InputSchema != nil {
+				JSONSchemaToXML(&sb, tool.InputSchema)
+			}
+			sb.WriteString("</parameters>\n")
+			sb.WriteString("</tool_description>\n")
+		}
+	}
+	sb.WriteString("</tools>\n")
+	return sb.String()
+}
+
+func JSONSchemaToXML(sb *strings.Builder, schema interface{}) {
+	s, ok := schema.(map[string]interface{})
+	if !ok {
+		return
+	}
+	properties, ok := s["properties"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for name, propIface := range properties {
+		prop, ok := propIface.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sb.WriteString("<parameter>\n")
+		// name
+		sb.WriteString("<name>")
+		sb.WriteString(name)
+		sb.WriteString("</name>\n")
+		// type
+		if t, ok := prop["type"].(string); ok {
+			sb.WriteString("<type>")
+			sb.WriteString(t)
+			sb.WriteString("</type>\n")
+		}
+		// description
+		if d, ok := prop["description"].(string); ok {
+			sb.WriteString("<description>")
+			sb.WriteString(d)
+			sb.WriteString("</description>\n")
+		}
+		// items
+		if items, ok := prop["items"]; ok {
+			sb.WriteString("<items>")
+			b, _ := json.Marshal(items)
+			sb.WriteString(string(b))
+			sb.WriteString("</items>\n")
+		}
+		// enum
+		if enums, ok := prop["enum"]; ok {
+			sb.WriteString("<enum>")
+			b, _ := json.Marshal(enums)
+			sb.WriteString(string(b))
+			sb.WriteString("</enum>\n")
+		}
+		sb.WriteString("</parameter>\n")
+	}
 }
 
 func builtinToolTokenCost(toolType string) int64 {
