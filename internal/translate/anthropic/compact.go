@@ -276,7 +276,8 @@ func (m *CompactStreamManager) Flush(writeSSEFunc func(eventType string, data in
 		"type":  "content_block_start",
 		"index": blockIndex,
 		"content_block": map[string]interface{}{
-			"type": "compaction",
+			"type": "text",
+			"text": "",
 		},
 	})
 
@@ -284,9 +285,8 @@ func (m *CompactStreamManager) Flush(writeSSEFunc func(eventType string, data in
 		"type":  "content_block_delta",
 		"index": blockIndex,
 		"delta": map[string]interface{}{
-			"type":       "compaction_delta",
-			"compaction": finalText,
-			"content":    finalText, // 兼容性冗余
+			"type": "text_delta",
+			"text": finalText,
 		},
 	})
 

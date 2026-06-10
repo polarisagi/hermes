@@ -425,10 +425,6 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 		writeEv("message_start", msgStartChunk)
 	}
 
-	if isCompact {
-		stopReason = "compaction"
-	}
-
 	writeEv("message_delta", map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
