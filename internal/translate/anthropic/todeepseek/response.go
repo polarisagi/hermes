@@ -115,13 +115,13 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 				}
 			case "content_block_stop":
 				if inCompactBlock && chunk["index"].(float64) == compactBlockIndex {
-					compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
+					compactManager.Flush(writeEv, int(compactBlockIndex))
 					inCompactBlock = false
 					continue
 				}
 			case "message_delta", "message_stop":
 				if inCompactBlock {
-					compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
+					compactManager.Flush(writeEv, int(compactBlockIndex))
 					inCompactBlock = false
 				}
 			}
@@ -132,6 +132,6 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	if inCompactBlock {
-		compactManager.Flush(w, flusher, writeEv, int(compactBlockIndex))
+		compactManager.Flush(writeEv, int(compactBlockIndex))
 	}
 }

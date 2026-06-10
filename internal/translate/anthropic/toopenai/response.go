@@ -98,8 +98,16 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 		}
 	}
 
+	// compact 模式：检测是否有真实内容，没有则不补空块（避免发出空 compaction 块）
+	// 普通模式：若 contents 为空补一个空 text 块保持协议兼容
 	if len(contents) == 0 {
-		contents = append(contents, map[string]interface{}{"type": "text", "text": ""})
+		if !isCompact {
+			contents = append(contents, map[string]interface{}{"type": "text", "text": ""})
+		}
+	}
+
+	if isCompact && anthr.HasRealContentMapSlice(contents) {
+		anthr.ProcessCompactNonStream(contents)
 	}
 
 	id := "msg_unknown"
@@ -289,6 +297,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 			}
 			if isCompact {
 				compactManager.BufferText(content)
+				inText = true    // 确保流结束时触发 compact flush 路径
 				continue
 			}
 
@@ -313,7 +322,9 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 				blockIndex++
 			}
 			if isCompact && compactManager.HasData() {
-				compactManager.Flush(w, flusher, writeEv, blockIndex)
+				compactManager.Flush(func(eventType string, data interface{}) {
+					writeEv(eventType, data)
+				}, blockIndex)
 				blockIndex++
 			} else if inText {
 				writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})
@@ -376,7 +387,9 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 		blockIndex++
 	}
 	if isCompact && compactManager.HasData() {
-		compactManager.Flush(w, flusher, writeEv, blockIndex)
+		compactManager.Flush(func(eventType string, data interface{}) {
+			writeEv(eventType, data)
+		}, blockIndex)
 		blockIndex++
 	} else if inText {
 		writeEv("content_block_stop", map[string]interface{}{"type": "content_block_stop", "index": blockIndex})

@@ -247,20 +247,8 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 		}
 	}
 
-	// 判断是否存在真正有意义的内容块：
-	// tool_use / thinking 视为有效内容；空文本块（Text == ""）不算有效内容
-	// 因为空文本块会导致 Claude Code /compact 报 "summarization produced empty response"
-	hasRealContent := false
-	for _, c := range contents {
-		if c.Type == "tool_use" || c.Type == "thinking" {
-			hasRealContent = true
-			break
-		}
-		if c.Type == "text" && c.Text != "" {
-			hasRealContent = true
-			break
-		}
-	}
+	// 判断是否存在真正有意义的内容块（使用公共辅助函数，支持 text/tool_use/thinking/compaction）
+	hasRealContent := anthr.HasRealContent(contents)
 	if isCompact && hasRealContent {
 		anthr.ProcessCompactNonStream(contents)
 	}

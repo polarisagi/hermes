@@ -115,6 +115,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		if isCompact {
 			compactManager.BufferText(fallbackTextBuf)
 			inText = true
+			emittedText = true // /compact 缓冲了内容，标记非空以防误判
 			fallbackTextBuf = ""
 			return
 		}
@@ -271,6 +272,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 					if isCompact {
 						compactManager.BufferText(text)
 						inText = true
+						emittedText = true // /compact 缓冲了内容，标记非空以防误判
 					} else {
 						if !inText {
 							writeSSE(w, flusher, "content_block_start", StreamEvent{
@@ -376,7 +378,8 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 
 					if isCompact {
 						compactManager.BufferText(text)
-						inText = true // 标记为 inText，让收尾逻辑触发 content_block_stop
+						inText = true    // 标记为 inText，让收尾逻辑触发 content_block_stop
+						emittedText = true // /compact 模式下文本已缓冲，视为有效内容，避免误判为空响应
 						continue
 					}
 
@@ -422,7 +425,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 				}
 				if inText {
 					if isCompact {
-						compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
+						compactManager.Flush(func(eventType string, data interface{}) {
 							writeSSE(w, flusher, eventType, data)
 						}, blockIndex)
 					} else {
@@ -559,7 +562,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 	}
 	if inText {
 		if isCompact {
-			compactManager.Flush(w, flusher, func(eventType string, data interface{}) {
+			compactManager.Flush(func(eventType string, data interface{}) {
 				writeSSE(w, flusher, eventType, data)
 			}, blockIndex)
 		} else {

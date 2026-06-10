@@ -4,12 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 )
 
 // IsCompactRequest 判断当前请求是否为 Claude Code 发出的 /compact 上下文截断请求。
-// 客户端会在此时清理旧思考并让模型总结历史。
+//
+// Claude Code 在发出 /compact 请求时会有以下特征（满足 ≥2 个即判定）：
+//   - 消息内容含 "TEXT ONLY"（提示模型仅返回文本）
+//   - 消息内容含 "summary"（大小写不敏感）
+//   - 消息内容含 "Do NOT call any tools"
+//   - 消息内容含 <analysis> 或 <summary> 标签
+//   - context_management.edits 中含 clear_thinking_* 或 compact_* 类型策略
+//
+// Beta Header: anthropic-beta: compact-2026-01-12
 func IsCompactRequest(req *MessageRequest) bool {
 	if req == nil || len(req.Messages) == 0 {
 		return false
@@ -56,7 +63,12 @@ func IsCompactRequest(req *MessageRequest) bool {
 	return features >= 2
 }
 
-// WrapCompactText 用于 /compact 请求：如果生成的文本缺失 <summary>，自动补全外层结构
+// WrapCompactText 用于 /compact 请求：如果生成的文本缺失 <summary> 标签，自动补全外层结构。
+//
+// 官方格式：
+//
+//	<analysis>...分析...</analysis>
+//	<summary>...压缩后的上下文摘要...</summary>
 func WrapCompactText(text string) string {
 	if !strings.Contains(text, "<summary>") {
 		return "<analysis>\nGateway manually wrapped this context compaction.\n</analysis>\n<summary>\n" + strings.TrimSpace(text) + "\n</summary>"
@@ -64,8 +76,92 @@ func WrapCompactText(text string) string {
 	return text
 }
 
+// HasRealContent 判断 []Content 切片中是否包含真正有意义的内容块。
+//
+// 有效内容定义：
+//   - type=tool_use 或 type=thinking：无论内容是否为空，均视为有效
+//   - type=text：Text 字段非空时视为有效
+//   - type=compaction：Content 字段（string）非空时视为有效（/compact 模式）
+//
+// 用途：togoogle 非流式响应的有效内容检测，防止将空响应误判为成功
+func HasRealContent(contents []Content) bool {
+	for _, c := range contents {
+		switch c.Type {
+		case "tool_use", "thinking":
+			return true
+		case "text":
+			if c.Text != "" {
+				return true
+			}
+		case "compaction":
+			// /compact 模式下文本被转为 compaction 类型，Content 字段存储文本
+			if str, ok := c.Content.(string); ok && str != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HasRealContentRaw 判断 []interface{} 内容块切片是否包含真正有意义的内容。
+//
+// 与 HasRealContent 相同逻辑，但处理 map[string]interface{} 形式的内容块
+// （toopenai 等使用动态 map 而非强类型结构体的场景）
+func HasRealContentRaw(contents []interface{}) bool {
+	for _, item := range contents {
+		c, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t, _ := c["type"].(string)
+		switch t {
+		case "tool_use", "thinking":
+			return true
+		case "text":
+			if text, _ := c["text"].(string); text != "" {
+				return true
+			}
+		case "compaction":
+			// /compact 模式下内容在 "content" 字段
+			if content, _ := c["content"].(string); content != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HasRealContentMapSlice 判断 []map[string]interface{} 内容块切片是否包含真正有意义的内容。
+//
+// 与 HasRealContentRaw 相同逻辑，但处理 []map[string]interface{} 类型
+// （toopenai handleNonStream 使用此类型构建 contents）
+func HasRealContentMapSlice(contents []map[string]interface{}) bool {
+	for _, c := range contents {
+		t, _ := c["type"].(string)
+		switch t {
+		case "tool_use", "thinking":
+			return true
+		case "text":
+			if text, _ := c["text"].(string); text != "" {
+				return true
+			}
+		case "compaction":
+			if content, _ := c["content"].(string); content != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ProcessCompactNonStream 处理非流式响应的 /compact 逻辑。
-// 支持 []Content 和 []interface{}（底层为 map[string]interface{}）
+//
+// 将响应内容块中第一个 text 或 compaction 块转换为标准的 compaction 格式：
+//   - type 设为 "compaction"
+//   - content 字段存放摘要文本（如缺失 <summary> 标签则自动补全）
+//   - text 字段清空
+//
+// 支持 []Content（togoogle 强类型）和 []interface{}（toopenai 动态 map）两种输入
 func ProcessCompactNonStream(contents interface{}) {
 	switch v := contents.(type) {
 	case []Content:
@@ -132,47 +228,74 @@ func ProcessCompactNonStream(contents interface{}) {
 	}
 }
 
-// CompactStreamManager 管理流式 /compact 响应的缓冲与发射
+// CompactStreamManager 管理流式 /compact 响应的缓冲与发射。
+//
+// 官方协议（compact-2026-01-12）：compaction_delta 一次性投递完整内容，
+// 而非像 text_delta 那样逐字符流式传输。因此本管理器先将所有文本缓冲，
+// 再在流结束时一次性发出三个事件：content_block_start → content_block_delta → content_block_stop
 type CompactStreamManager struct {
 	TraceID        string
 	compactTextBuf string
 }
 
+// BufferText 向缓冲区追加文本（流式接收到的每个文本分片）
 func (m *CompactStreamManager) BufferText(text string) {
 	m.compactTextBuf += text
 }
 
-func (m *CompactStreamManager) Flush(w http.ResponseWriter, flusher http.Flusher, writeSSEFunc func(eventType string, data interface{}), blockIndex int) {
+// HasData 返回缓冲区是否有待发送的内容
+func (m *CompactStreamManager) HasData() bool {
+	return m.compactTextBuf != ""
+}
+
+// Flush 将缓冲区内容以标准 compaction SSE 事件序列发出。
+//
+// 发出事件序列（符合官方 compact-2026-01-12 规范）：
+//
+//	content_block_start  → content_block.type = "compaction"
+//	content_block_delta  → delta.type = "compaction_delta", delta.content = 完整摘要
+//	content_block_stop
+//
+// 参数：
+//   - writeSSEFunc: SSE 事件写入函数（由各子翻译器的 writeEv/writeSSE 闭包提供）
+//   - blockIndex: 当前内容块的索引
+func (m *CompactStreamManager) Flush(writeSSEFunc func(eventType string, data interface{}), blockIndex int) {
 	if m.compactTextBuf == "" {
 		return
 	}
-
-	writeSSEFunc("content_block_start", map[string]interface{}{
-		"type": "content_block_start", "index": blockIndex,
-		"content_block": map[string]interface{}{"type": "compaction"},
-	})
 
 	finalText := WrapCompactText(m.compactTextBuf)
 	if finalText != m.compactTextBuf {
 		slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全 (Stream)", "trace_id", m.TraceID)
 	}
 
+	writeSSEFunc("content_block_start", map[string]interface{}{
+		"type":  "content_block_start",
+		"index": blockIndex,
+		"content_block": map[string]interface{}{
+			"type": "compaction",
+		},
+	})
+
 	writeSSEFunc("content_block_delta", map[string]interface{}{
-		"type": "content_block_delta", "index": blockIndex,
-		"delta": map[string]interface{}{"type": "compaction_delta", "content": finalText},
+		"type":  "content_block_delta",
+		"index": blockIndex,
+		"delta": map[string]interface{}{
+			"type":    "compaction_delta",
+			"content": finalText,
+		},
 	})
 
 	writeSSEFunc("content_block_stop", map[string]interface{}{
-		"type": "content_block_stop", "index": blockIndex,
+		"type":  "content_block_stop",
+		"index": blockIndex,
 	})
+
 	m.compactTextBuf = ""
 }
 
-func (m *CompactStreamManager) HasData() bool {
-	return m.compactTextBuf != ""
-}
-
-// FlattenSystemPrompt 将 Anthropic System Prompt (字符串或数组) 扁平化为纯文本
+// FlattenSystemPrompt 将 Anthropic System Prompt（字符串或数组格式）扁平化为纯文本。
+// 用于 BuildCompactPrompt 提取 system 内容。
 func FlattenSystemPrompt(sys interface{}) string {
 	if sys == nil {
 		return ""
@@ -195,8 +318,12 @@ func FlattenSystemPrompt(sys interface{}) string {
 	return ""
 }
 
-// BuildCompactPrompt 将一个饱含历史、工具调用、思考的复杂 /compact 请求提取压缩为单一纯文本 Prompt。
-// 这样可以确保将其发给不支持这些复杂类型或在压缩模式下容易出错的模型（Google, OpenAI, DeepSeek等）时，能获取到极其稳定一致的压缩响应。
+// BuildCompactPrompt 将复杂的 /compact 请求（含工具调用、思考块、历史等）压缩为单一纯文本 Prompt。
+//
+// 通过将所有消息历史序列化为 XML 结构后，以单条 user 消息发给目标模型（Google/OpenAI/DeepSeek），
+// 避免这些模型因无法处理 Anthropic 专属内容块（thinking、tool_result 等）而出错。
+// 目标模型返回的摘要文本将被 ProcessCompactNonStream 或 CompactStreamManager 转换为
+// 标准的 compaction content block 返回给 Claude Code。
 func BuildCompactPrompt(req *MessageRequest) string {
 	var sb strings.Builder
 	for _, msg := range req.Messages {
@@ -229,7 +356,14 @@ func BuildCompactPrompt(req *MessageRequest) string {
 	}
 	historyXML := sb.String()
 	systemPrompt := FlattenSystemPrompt(req.System)
-	promptInjection := fmt.Sprintf("System Context: %s\n\n<conversation_history>\n%s\n</conversation_history>\n\nSystem Task: You are performing a context compaction. Please distill the conversation history above into a highly compressed, concise summary. Focus strictly on preserving critical facts, the user's main intent, important context, and any established rules or constraints. Discard all conversational fluff, routine tool outputs, and redundant steps.", systemPrompt, historyXML)
-
-	return promptInjection
+	return fmt.Sprintf(
+		"System Context: %s\n\n<conversation_history>\n%s\n</conversation_history>\n\n"+
+			"System Task: You are performing a context compaction. Please distill the conversation history above "+
+			"into a highly compressed, concise summary. Focus strictly on preserving critical facts, the user's "+
+			"main intent, important context, and any established rules or constraints. Discard all conversational "+
+			"fluff, routine tool outputs, and redundant steps. Output MUST use this format:\n"+
+			"<analysis>\n[Current task status and key technical decisions]\n</analysis>\n"+
+			"<summary>\n[Dense compressed summary preserving all critical context]\n</summary>",
+		systemPrompt, historyXML,
+	)
 }

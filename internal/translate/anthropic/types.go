@@ -69,14 +69,36 @@ type RequestMetadata struct {
 }
 
 // ContextManagement Anthropic 上下文管理配置（beta 特性）
+// Beta header: anthropic-beta: compact-2026-01-12
 type ContextManagement struct {
 	Edits []ContextEdit `json:"edits,omitempty"`
 }
 
+// ContextEdit 单条上下文管理编辑策略
+//
+// type 枚举（官方 2026 规范）：
+//   - compact_20260112        : 核心压缩策略（/compact 命令触发）
+//   - clear_thinking_20251015 : 清理旧 thinking block
+//   - clear_tool_uses_20250919: 清理旧 tool result block
 type ContextEdit struct {
-	Type     string `json:"type,omitempty"`
-	Strategy string `json:"strategy,omitempty"`
-	Keep     string `json:"keep,omitempty"`
+	Type                 string              `json:"type,omitempty"`
+	Trigger              *ContextEditTrigger `json:"trigger,omitempty"`
+	Instructions         string              `json:"instructions,omitempty"`
+	PauseAfterCompaction bool                `json:"pause_after_compaction,omitempty"`
+	Keep                 *ContextEditKeep    `json:"keep,omitempty"`
+	Strategy             string              `json:"strategy,omitempty"` // 兼容旧格式
+}
+
+// ContextEditTrigger 触发阈值配置（type 固定为 "input_tokens"）
+type ContextEditTrigger struct {
+	Type  string `json:"type"`  // 目前固定为 "input_tokens"
+	Value int    `json:"value"` // 触发阈值 token 数（官方最低要求 50000）
+}
+
+// ContextEditKeep 保留策略配置
+type ContextEditKeep struct {
+	Type  string `json:"type"`  // "tool_uses" | "thinking_turns"
+	Value int    `json:"value"` // 保留数量
 }
 
 // MessageResponse Anthropic 非流式响应结构
