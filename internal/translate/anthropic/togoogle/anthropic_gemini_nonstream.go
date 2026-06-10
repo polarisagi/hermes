@@ -162,11 +162,20 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 								lastSig = sig
 							}
 							if thinkText != "" {
-								contents = append(contents, Content{
-									Type:      "thinking",
-									Thinking:  thinkText,
-									Signature: sig,
-								})
+								if isCompact {
+									// /compact 模式：思考内容合并为普通文本参与摘要，丢弃 signature
+									// 压缩后旧对话全部丢弃，无需回传 thoughtSignature
+									contents = append(contents, Content{
+										Type: "text",
+										Text: thinkText,
+									})
+								} else {
+									contents = append(contents, Content{
+										Type:      "thinking",
+										Thinking:  thinkText,
+										Signature: sig,
+									})
+								}
 							}
 							continue
 						}
