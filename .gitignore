@@ -21,6 +21,7 @@ tmp_bin/
 !CLAUDE.md
 !AGENTS.md
 !docs/**/*.md
+docs/superpowers/
 
 # Sisyphus
 .sisyphus/
