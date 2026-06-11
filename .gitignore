@@ -22,6 +22,7 @@ tmp_bin/
 !AGENTS.md
 !docs/**/*.md
 docs/superpowers/
+test_anthropic_geap.go
 
 # Sisyphus
 .sisyphus/
