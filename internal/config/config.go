@@ -71,11 +71,6 @@ func LoadConfig(path string) error {
 	GlobalConfig.Database.Path = expandPath(GlobalConfig.Database.Path)
 	GlobalConfig.Sync.DataDir = expandPath(GlobalConfig.Sync.DataDir)
 
-	// TEST_MODE=true 时切换到测试端口 28889，避免与线上 27777 冲突
-	if os.Getenv("TEST_MODE") == "true" {
-		GlobalConfig.Server.ListenAddr = "127.0.0.1:28889"
-	}
-
 	return nil
 }
 

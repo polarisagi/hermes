@@ -40,7 +40,11 @@ func New() *App {
 
 func (a *App) Run() error {
 	// 1. 加载配置
-	if err := config.LoadConfig("config.toml"); err != nil {
+	configPath := os.Getenv("HERMES_CONFIG")
+	if configPath == "" {
+		configPath = "config.toml"
+	}
+	if err := config.LoadConfig(configPath); err != nil {
 		slog.Error("加载配置失败", "error", err)
 		return err
 	}

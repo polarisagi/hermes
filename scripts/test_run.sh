@@ -38,9 +38,21 @@ echo "======================================"
 echo "✨ 启动新的网关实例..."
 echo "======================================"
 
+# 如果没有测试配置文件，则基于线上配置生成一份，并将端口改为 27779
+if [ ! -f config.test.toml ]; then
+    if [ -f config.toml ]; then
+        cp config.toml config.test.toml
+        # 兼容 macOS 和 Linux 的 sed 替换
+        sed -i.bak 's/listen_addr = "127.0.0.1:27777"/listen_addr = "127.0.0.1:27779"/g' config.test.toml && rm -f config.test.toml.bak
+    else
+        echo '[server]' > config.test.toml
+        echo 'listen_addr = "127.0.0.1:27779"' >> config.test.toml
+    fi
+fi
+
 # 启动新的实例（放在后台运行或者前台运行，这里为了查看日志放前台）
 # 如果希望它在后台运行，可以加 & 并在末尾 tail -f 日志
-TEST_MODE=true ./tmp_bin/hermes
+HERMES_CONFIG=config.test.toml ./tmp_bin/hermes
 
 
 # bash scripts/test_run.sh
