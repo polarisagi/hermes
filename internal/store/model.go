@@ -15,9 +15,10 @@ func NewModelRepo() *ModelRepo {
 
 func (r *ModelRepo) GetUserModels(ctx context.Context) ([]domain.UserModel, error) {
 	query := `
-		SELECT u.id, u.user_provider_id, IFNULL(u.display_name, ''), u.model_id, u.capability_tier, u.is_active,
+		SELECT u.id, u.user_provider_id, p.provider_id, IFNULL(u.display_name, ''), u.model_id, u.capability_tier, u.is_active,
 		       IFNULL(s.version_weight, 0), IFNULL(s.is_legacy, 0), IFNULL(s.released_at, 0)
 		FROM user_models u
+		JOIN user_providers p ON u.user_provider_id = p.id
 		LEFT JOIN sys_models s ON u.model_id = s.model_id
 		WHERE u.is_active = 1
 		ORDER BY u.capability_tier ASC, u.model_id ASC
@@ -32,7 +33,7 @@ func (r *ModelRepo) GetUserModels(ctx context.Context) ([]domain.UserModel, erro
 	for rows.Next() {
 		var m domain.UserModel
 		var releasedAt int64
-		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive, &m.VersionWeight, &m.IsLegacy, &releasedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.UserProviderID, &m.ProviderID, &m.DisplayName, &m.ModelID, &m.CapabilityTier, &m.IsActive, &m.VersionWeight, &m.IsLegacy, &releasedAt); err != nil {
 			return nil, err
 		}
 		if m.VersionWeight == 0 && releasedAt > 0 {

@@ -72,18 +72,12 @@ export default {
 
             getUniqueModels() {
                 const models = Alpine.store('global').allModels || [];
-                const nodes = Alpine.store('global').nodes || [];
                 const seen = new Set();
                 const unique = [];
 
-                const getProviderId = (userProviderId) => {
-                    const node = nodes.find(n => n.id === userProviderId);
-                    return node ? node.provider_id : 'unknown';
-                };
-
                 // 添加唯一模型（按 厂商 + 模型ID 去重展示）
                 for (const m of models) {
-                    const pid = getProviderId(m.user_provider_id);
+                    const pid = m.provider_id || 'unknown';
                     const key = `${pid}|${m.model_id}`;
                     if (!seen.has(key)) {
                         seen.add(key);

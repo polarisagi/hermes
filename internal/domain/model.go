@@ -32,6 +32,7 @@ type SysProviderModel struct {
 type UserModel struct {
 	ID             int    `json:"id"`
 	UserProviderID int    `json:"user_provider_id"`
+	ProviderID     string `json:"provider_id"`     // Join 获得，方便前端直接展示
 	DisplayName    string `json:"display_name"`
 	ModelID        string `json:"model_id"`
 	CapabilityTier string `json:"capability_tier"` // 主观标记该模型的梯队
