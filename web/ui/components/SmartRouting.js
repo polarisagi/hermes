@@ -70,6 +70,40 @@ export default {
 
             // ─── Helpers ─────────────────────────────────────────────────────
 
+            getUniqueModels() {
+                const models = Alpine.store('global').allModels || [];
+                const nodes = Alpine.store('global').nodes || [];
+                const seen = new Set();
+                const currentId = parseInt(this.routeForm.target_user_model_id, 10);
+                const unique = [];
+
+                const getProviderId = (userProviderId) => {
+                    const node = nodes.find(n => n.id === userProviderId);
+                    return node ? node.provider_id : 'unknown';
+                };
+
+                // 保留当前已选的模型（防止编辑时被去重掉导致无法回显）
+                const currentModel = models.find(m => m.id === currentId);
+                if (currentModel) {
+                    currentModel._provider = getProviderId(currentModel.user_provider_id);
+                    unique.push(currentModel);
+                    seen.add(`${currentModel._provider}-${currentModel.model_id}-${currentModel.capability_tier}`);
+                }
+
+                // 添加其他唯一模型（按 厂商 + 模型ID 去重展示）
+                for (const m of models) {
+                    const pid = getProviderId(m.user_provider_id);
+                    const key = `${pid}-${m.model_id}-${m.capability_tier}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        m._provider = pid;
+                        unique.push(m);
+                    }
+                }
+
+                return unique;
+            },
+
             getTargetModelName(id) {
                 const models = Alpine.store('global').allModels || [];
                 const m = models.find(x => x.id === id);
@@ -605,9 +639,9 @@ export default {
                                     <div class="space-y-2">
                                         <select name="routeForm_target_user_model_id" x-model="routeForm.target_user_model_id"
                                                 class="select select-bordered w-full font-mono text-success">
-                                            <template x-for="m in $store.global.allModels" :key="m.id">
+                                            <template x-for="m in getUniqueModels()" :key="m.id">
                                                 <option :value="m.id"
-                                                        x-text="(m.display_name || m.model_id) + ' (' + m.model_id + ') [' + (m.capability_tier || 'smart') + ']'"></option>
+                                                        x-text="(m.display_name || m.model_id) + ' (' + m.model_id + ') · ' + (m._provider || 'unknown') + ' [' + (m.capability_tier || 'smart') + ']'"></option>
                                             </template>
                                         </select>
                                         <template x-if="routeForm.target_user_model_id">
