@@ -169,10 +169,7 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*pool.ActiveChannel, string, error) {
 	slog.Debug("启动 4 级智能路由管线", "requested_model", requestedModelID)
 
-	// [优先级 1] 自定义硬路由
-	if targets := p.checkCustomRoute(requestedModelID); len(targets) > 0 {
-		slog.Debug("命中自定义硬路由", "targets", targets)
-		
+	executeCustomRoutes := func(targets []TargetPlatformRoute, src string) (*pool.ActiveChannel, string, error) {
 		var lastRouteErr error
 		for _, target := range targets {
 			ch, actualModel, err := p.chanManager.SelectBestChannelByProviderAndModel(target.ProviderID, target.ModelID)
@@ -180,7 +177,7 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 				p.routingLogRepo.SaveAsync(&domain.RoutingLog{
 					RequestedModel: requestedModelID,
 					ResolvedTier:   "custom",
-					ResolutionSrc:  "custom_route",
+					ResolutionSrc:  src,
 					ProviderName:   ch.Provider.ProviderID,
 					ActualModel:    actualModel,
 					UserProviderID: ch.Provider.ID,
@@ -190,11 +187,35 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 			}
 			lastRouteErr = err
 		}
-		slog.Warn("自定义路由候选节点均不可用，降级至意图推断", "targets", targets, "last_err", lastRouteErr)
+		return nil, "", lastRouteErr
+	}
+
+	// [优先级 1] 自定义硬路由 (按模型名)
+	if targets := p.checkCustomRoute(requestedModelID); len(targets) > 0 {
+		slog.Debug("命中自定义硬路由", "targets", targets)
+		ch, actualModel, err := executeCustomRoutes(targets, "custom_route")
+		if err == nil {
+			return ch, actualModel, nil
+		}
+		slog.Warn("自定义路由候选节点均不可用，降级至意图推断", "targets", targets, "last_err", err)
 	}
 
 	tier, resolutionSrc := p.resolveCapabilityTier(ctx, requestedModelID)
 	slog.Info("意图解析成功", "requested_model", requestedModelID, "resolved_tier", tier, "match_source", resolutionSrc)
+
+	// [优先级 2] 基于梯队的自定义硬路由覆盖
+	p.mu.RLock()
+	tierTargets, hasTierRoute := p.customRouteMap[tier]
+	p.mu.RUnlock()
+
+	if hasTierRoute && len(tierTargets) > 0 {
+		slog.Debug("命中梯队级别的自定义硬路由", "tier", tier, "targets", tierTargets)
+		ch, actualModel, err := executeCustomRoutes(tierTargets, "tier_custom_route")
+		if err == nil {
+			return ch, actualModel, nil
+		}
+		slog.Warn("梯队自定义路由候选节点不可用，降级至全局梯队轮询", "tier", tier, "last_err", err)
+	}
 
 	// Tier 级联熔断链
 	var tiersToTry []string
