@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -284,9 +285,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			finalAccountName = activeChan.Provider.Name
 		}
 		if err != nil {
-			slog.Error("路由匹配失败", "requested_model", modelName, "error", err)
-			s.writeError(w, clientProtocol, http.StatusServiceUnavailable, "overloaded_error",
-				"No available upstream models to serve this request")
+			if errors.Is(err, pool.ErrAllChannelsBusy) && attempt < maxRetries {
+				slog.Warn("所有可用渠道均繁忙，等待重试", "attempt", attempt, "model", modelName)
+				time.Sleep(500 * time.Millisecond)
+				lastErr = err
+				continue
+			}
+			skipBilling = true
+			if errors.Is(err, pool.ErrAllChannelsBusy) {
+				slog.Error("路由匹配失败 (所有可用渠道均繁忙/熔断/额度耗尽)", "requested_model", modelName, "error", err)
+				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "rate_limit_error",
+					"All upstream channels are currently busy, cooling down, or exhausted. Please try again later.")
+			} else {
+				slog.Error("路由匹配失败 (无满足条件的可用模型/节点)", "requested_model", modelName, "error", err)
+				s.writeError(w, clientProtocol, http.StatusServiceUnavailable, "invalid_request_error",
+					"No available models found for the requested capability tier. Please check your system model configurations.")
+			}
 			return
 		}
 
@@ -313,6 +327,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if targetProtocol == "" {
 			slog.Error("无兼容的后端协议端点", "channel", activeChan.Provider.Name, "client_protocol", clientProtocol)
 			s.chanManager.ReleaseChannel(activeChan)
+			skipBilling = true
 			http.Error(w, "No compatible backend protocol endpoint for channel", http.StatusBadGateway)
 			return
 		}
@@ -326,6 +341,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if trans == nil {
 			slog.Warn("未找到翻译器插件", "translator_key", translatorKey, "provider", activeChan.Provider.ProviderID)
 			s.chanManager.ReleaseChannel(activeChan)
+			skipBilling = true
 			s.writeError(w, clientProtocol, http.StatusNotImplemented, "api_error",
 				"Translator not implemented: "+translatorKey)
 			return
@@ -352,6 +368,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if errConv != nil {
 				slog.Error("ResponsesAPIToChatCompletions 失败", "error", errConv)
 				s.chanManager.ReleaseChannel(activeChan)
+				skipBilling = true
 				http.Error(w, "Invalid Responses API payload", http.StatusBadRequest)
 				return
 			}
@@ -361,6 +378,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Error("TranslateRequest 失败", "error", err)
 			s.chanManager.ReleaseChannel(activeChan)
+			skipBilling = true
 			http.Error(w, "Failed to translate request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -376,6 +394,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
 		if err != nil {
 			s.chanManager.ReleaseChannel(activeChan)
+			skipBilling = true
 			http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
 			return
 		}
@@ -393,6 +412,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := auth.InjectAuth(r.Context(), proxyReq, activeChan.Provider, targetEndpoint); err != nil {
 			slog.Error("Auth 注入失败", "error", err)
 			s.chanManager.ReleaseChannel(activeChan)
+			skipBilling = true
 			http.Error(w, "Auth injection failed", http.StatusInternalServerError)
 			return
 		}
@@ -483,6 +503,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Error("网关所有重试耗尽", "lastErr", lastErr)
+	skipBilling = true
 	s.writeError(w, clientProtocol, http.StatusBadGateway, "api_error",
 		fmt.Sprintf("All retries failed: %v", lastErr))
 }

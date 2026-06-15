@@ -54,8 +54,7 @@ func ProcessBilling(
 	// 打印明确的计费和 Token 消耗日志
 	slog.Info("💰 [Billing] 请求计费统计",
 		"client", clientName,
-		"method", reqMethod,
-		"path", reqPath,
+		"account", accountName,
 		"model", actualModelID,
 		"latency_ms", latencyMs,
 		"prompt_tokens", promptTokens,

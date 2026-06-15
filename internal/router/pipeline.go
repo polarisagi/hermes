@@ -172,10 +172,15 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 		tiersToTry = []string{"smart", "fast"}
 	}
 
+	var lastErr error
+
 	for idx, t := range tiersToTry {
 		ch, actualModel, err := p.chanManager.SelectBestChannelByTier(t)
 		if err != nil {
-			slog.Debug("当前 tier 无可用节点，尝试下一级", "tier", t)
+			slog.Debug("当前 tier 无可用节点，尝试下一级", "tier", t, "error", err)
+			if errors.Is(err, pool.ErrAllChannelsBusy) {
+				lastErr = err
+			}
 			continue
 		}
 
@@ -200,6 +205,9 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 	}
 
 	slog.Error("没有找到匹配该请求的任何可用节点", "requested_model", requestedModelID, "tried_tiers", tiersToTry)
+	if lastErr != nil {
+		return nil, "", lastErr
+	}
 	return nil, "", ErrNoAvailableModel
 }
 

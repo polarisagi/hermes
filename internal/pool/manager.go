@@ -229,9 +229,10 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 	defer m.mu.RUnlock()
 
 	type candidate struct {
-		ch            *ActiveChannel
-		targetModelID string
-		info          SysModelCacheInfo
+		ch              *ActiveChannel
+		targetModelID   string
+		info            SysModelCacheInfo
+		lastAcquireTime time.Time
 	}
 	var candidates []candidate
 
@@ -255,10 +256,11 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 				avail = false
 			}
 		}
+		lastAcq := ch.LastAcquireTime
 		ch.mu.Unlock()
 
 		if avail {
-			candidates = append(candidates, candidate{ch: ch, targetModelID: targetModel, info: info})
+			candidates = append(candidates, candidate{ch: ch, targetModelID: targetModel, info: info, lastAcquireTime: lastAcq})
 		}
 	}
 
@@ -280,7 +282,7 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 		if pi != pj {
 			return pi < pj
 		}
-		ti, tj := candidates[i].ch.LastAcquireTime, candidates[j].ch.LastAcquireTime
+		ti, tj := candidates[i].lastAcquireTime, candidates[j].lastAcquireTime
 		if ti.IsZero() != tj.IsZero() {
 			return ti.IsZero()
 		}

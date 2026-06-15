@@ -16,7 +16,6 @@ import (
 )
 
 const polarisAPIKey = "sk-hermes"
-const polarisMarker = "hermes"
 
 type clientDef struct {
 	Name           string
@@ -780,35 +779,7 @@ func applyJSONConfig(path string, patch map[string]any) error {
 	return atomicWriteFile(path, out, 0644)
 }
 
-func removeStaleProviderEntry(path, providerKey string) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(data, &obj); err != nil {
-		return
-	}
-	providers, ok := obj["provider"].(map[string]any)
-	if !ok {
-		return
-	}
-	entry, ok := providers[providerKey].(map[string]any)
-	if !ok {
-		return
-	}
-	options, _ := entry["options"].(map[string]any)
-	apiKey, _ := options["apiKey"].(string)
-	if !strings.Contains(strings.ToLower(apiKey), polarisMarker) {
-		return
-	}
-	delete(providers, providerKey)
-	out, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		return
-	}
-	_ = atomicWriteFile(path, out, 0644)
-}
+
 
 func isJSONConfiguredValue(path, jsonPath, expectedValue string) bool {
 	data, err := os.ReadFile(path)
