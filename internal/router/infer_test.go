@@ -103,10 +103,6 @@ func TestPipeline_checkCustomRoute(t *testing.T) {
 		{"claude-haiku-mini", []TargetPlatformRoute{{"anthropic", "claude-1"}}},
 		// 命中后缀模式 *-mini（不是 claude- 开头）
 		{"gpt-4o-mini", []TargetPlatformRoute{{"openai", "gpt-mini"}}},
-		// 命中全局兜底
-		{"unknown-model", []TargetPlatformRoute{{"fallback", "model"}}},
-		// 全局兜底（无任何匹配）
-		{"deepseek-v4", []TargetPlatformRoute{{"fallback", "model"}}},
 	}
 
 	for _, tt := range tests {

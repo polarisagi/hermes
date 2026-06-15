@@ -214,10 +214,20 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 		if err == nil {
 			return ch, actualModel, nil
 		}
-		slog.Warn("梯队自定义路由候选节点不可用，降级至全局梯队轮询", "tier", tier, "last_err", err)
+		slog.Warn("梯队自定义路由候选节点不可用，降级至下一级", "tier", tier, "last_err", err)
 	}
 
-	// Tier 级联熔断链
+	// [优先级 3] 全局通配符兜底路由
+	if wildcardTargets := p.checkWildcardRoute(); len(wildcardTargets) > 0 {
+		slog.Debug("命中全局通配符自定义路由", "targets", wildcardTargets)
+		ch, actualModel, err := executeCustomRoutes(wildcardTargets, "wildcard_custom_route")
+		if err == nil {
+			return ch, actualModel, nil
+		}
+		slog.Warn("全局通配符候选节点均不可用，降级至智能轮询", "targets", wildcardTargets, "last_err", err)
+	}
+
+	// Tier 级联熔断链 (智能轮询)
 	var tiersToTry []string
 	switch tier {
 	case "fast":
@@ -307,5 +317,11 @@ func (p *Pipeline) checkCustomRoute(requestedModelID string) []TargetPlatformRou
 		}
 	}
 
+	return nil
+}
+
+func (p *Pipeline) checkWildcardRoute() []TargetPlatformRoute {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.wildcardRoutes
 }
