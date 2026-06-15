@@ -75,35 +75,38 @@ func TestIntentInferer_InferByKeywords(t *testing.T) {
 
 func TestPipeline_checkCustomRoute(t *testing.T) {
 	p := &Pipeline{
-		// 精确匹配：claude-opus-4-8 → [1, 2]
-		customRouteMap: map[string][]int{
-			"claude-opus-4-8": {1, 2},
+		// 精确匹配：claude-opus-4-8 → targets
+		customRouteMap: map[string][]TargetPlatformRoute{
+			"claude-opus-4-8": {
+				{"anthropic", "claude-opus-1"},
+				{"anthropic", "claude-opus-2"},
+			},
 		},
 		// 通配符模式：claude-* (specificity=7) > *-mini (specificity=5)
 		patternRoutes: []routePattern{
-			{prefix: "claude-", suffix: "", ids: []int{3, 4}, specificity: 7},
-			{prefix: "", suffix: "-mini", ids: []int{5}, specificity: 5},
+			{prefix: "claude-", suffix: "", targets: []TargetPlatformRoute{{"anthropic", "claude-1"}}, specificity: 7},
+			{prefix: "", suffix: "-mini", targets: []TargetPlatformRoute{{"openai", "gpt-mini"}}, specificity: 5},
 		},
 		// 全局兜底
-		wildcardRouteIDs: []int{99},
+		wildcardRoutes: []TargetPlatformRoute{{"fallback", "model"}},
 	}
 
 	tests := []struct {
 		modelID  string
-		expected []int
+		expected []TargetPlatformRoute
 	}{
 		// 精确匹配优先
-		{"claude-opus-4-8", []int{1, 2}},
+		{"claude-opus-4-8", []TargetPlatformRoute{{"anthropic", "claude-opus-1"}, {"anthropic", "claude-opus-2"}}},
 		// 命中前缀模式 claude-*
-		{"claude-sonnet-4-6", []int{3, 4}},
+		{"claude-sonnet-4-6", []TargetPlatformRoute{{"anthropic", "claude-1"}}},
 		// 命中前缀模式 claude-* 而非后缀 *-mini（更具体的模式优先）
-		{"claude-haiku-mini", []int{3, 4}},
+		{"claude-haiku-mini", []TargetPlatformRoute{{"anthropic", "claude-1"}}},
 		// 命中后缀模式 *-mini（不是 claude- 开头）
-		{"gpt-4o-mini", []int{5}},
+		{"gpt-4o-mini", []TargetPlatformRoute{{"openai", "gpt-mini"}}},
 		// 命中全局兜底
-		{"unknown-model", []int{99}},
+		{"unknown-model", []TargetPlatformRoute{{"fallback", "model"}}},
 		// 全局兜底（无任何匹配）
-		{"deepseek-v4", []int{99}},
+		{"deepseek-v4", []TargetPlatformRoute{{"fallback", "model"}}},
 	}
 
 	for _, tt := range tests {
