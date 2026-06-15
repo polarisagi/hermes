@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,8 +224,8 @@ func (m *Manager) resolveActualModelID(modelID, providerID string) SysModelCache
 	return SysModelCacheInfo{ActualModelID: modelID}
 }
 
-// selectBest 通用核心：筛选、排序、CAS 抢占。filter 返回 (targetModelID, isMatch)
-func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheInfo, bool)) (*ActiveChannel, string, error) {
+// selectBest 通用核心：筛选、排序、CAS 抢占。filter 返回 (targetModelID, info, affinityScore, isMatch)
+func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheInfo, int, bool)) (*ActiveChannel, string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -232,12 +233,13 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 		ch              *ActiveChannel
 		targetModelID   string
 		info            SysModelCacheInfo
+		affinity        int
 		lastAcquireTime time.Time
 	}
 	var candidates []candidate
 
 	for _, ch := range m.channels {
-		targetModel, info, matched := filter(ch)
+		targetModel, info, affinity, matched := filter(ch)
 		if !matched {
 			continue
 		}
@@ -260,7 +262,7 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 		ch.mu.Unlock()
 
 		if avail {
-			candidates = append(candidates, candidate{ch: ch, targetModelID: targetModel, info: info, lastAcquireTime: lastAcq})
+			candidates = append(candidates, candidate{ch: ch, targetModelID: targetModel, info: info, affinity: affinity, lastAcquireTime: lastAcq})
 		}
 	}
 
@@ -268,8 +270,12 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 		return nil, "", ErrAllChannelsBusy
 	}
 
-	// 排序：非Legacy > 版本权重高 > 优先级小 > LRU
+	// 排序：模型亲和力 > 非Legacy > 版本权重高 > 优先级小 > LRU
 	sort.SliceStable(candidates, func(i, j int) bool {
+		ai, aj := candidates[i].affinity, candidates[j].affinity
+		if ai != aj {
+			return ai > aj
+		}
 		li, lj := candidates[i].info.IsLegacy, candidates[j].info.IsLegacy
 		if li != lj {
 			return !li
@@ -326,8 +332,8 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 }
 
 // SelectBestChannelByTier 极简模式负载均衡：按能力梯队选最优渠道
-func (m *Manager) SelectBestChannelByTier(tier string) (*ActiveChannel, string, error) {
-	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, bool) {
+func (m *Manager) SelectBestChannelByTier(tier string, requestedModelID string) (*ActiveChannel, string, error) {
+	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
 		var bestMod *domain.UserModel
 		for i := range ch.Models {
 			mod := &ch.Models[i]
@@ -345,9 +351,19 @@ func (m *Manager) SelectBestChannelByTier(tier string) (*ActiveChannel, string, 
 		}
 		if bestMod != nil {
 			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
-			return info.ActualModelID, info, true
+			
+			affinity := 0
+			lowerActual := strings.ToLower(info.ActualModelID)
+			lowerReq := strings.ToLower(requestedModelID)
+			if lowerActual == lowerReq {
+				affinity = 2
+			} else if strings.Contains(lowerActual, lowerReq) || strings.Contains(lowerReq, lowerActual) {
+				affinity = 1
+			}
+
+			return info.ActualModelID, info, affinity, true
 		}
-		return "", SysModelCacheInfo{}, false
+		return "", SysModelCacheInfo{}, 0, false
 	})
 }
 
@@ -362,7 +378,7 @@ func (m *Manager) SelectBestChannelByUserModelIDs(userModelIDs []int) (*ActiveCh
 		idSet[id] = struct{}{}
 	}
 
-	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, bool) {
+	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
 		var bestMod *domain.UserModel
 		for i := range ch.Models {
 			mod := &ch.Models[i]
@@ -380,9 +396,9 @@ func (m *Manager) SelectBestChannelByUserModelIDs(userModelIDs []int) (*ActiveCh
 		}
 		if bestMod != nil {
 			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
-			return info.ActualModelID, info, true
+			return info.ActualModelID, info, 2, true
 		}
-		return "", SysModelCacheInfo{}, false
+		return "", SysModelCacheInfo{}, 0, false
 	})
 }
 

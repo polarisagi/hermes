@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 var ErrNoAvailableModel = errors.New("no available model found for the requested capability tier")
 
 type routePattern struct {
+	re          *regexp.Regexp
 	prefix      string
 	suffix      string
 	ids         []int
@@ -23,6 +25,9 @@ type routePattern struct {
 }
 
 func (rp *routePattern) match(modelID string) bool {
+	if rp.re != nil {
+		return rp.re.MatchString(modelID)
+	}
 	if rp.prefix != "" && !strings.HasPrefix(modelID, rp.prefix) {
 		return false
 	}
@@ -81,6 +86,21 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 			pat := r.RequestedModelID
 			if pat == "*" {
 				newWildcardIDs = append(newWildcardIDs, r.TargetUserModelID)
+			} else if strings.ContainsAny(pat, "^$|()[]+") {
+				if rp, exists := patternMap[pat]; exists {
+					rp.ids = append(rp.ids, r.TargetUserModelID)
+				} else {
+					re, err := regexp.Compile(pat)
+					if err != nil {
+						slog.Warn("无效的正则路由规则，已忽略", "pattern", pat, "error", err)
+					} else {
+						patternMap[pat] = &routePattern{
+							re:          re,
+							ids:         []int{r.TargetUserModelID},
+							specificity: 1000, // 正则匹配具有较高优先级
+						}
+					}
+				}
 			} else if strings.Contains(pat, "*") {
 				idx := strings.Index(pat, "*")
 				prefix, suffix := pat[:idx], pat[idx+1:]
@@ -175,7 +195,7 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 	var lastErr error
 
 	for idx, t := range tiersToTry {
-		ch, actualModel, err := p.chanManager.SelectBestChannelByTier(t)
+		ch, actualModel, err := p.chanManager.SelectBestChannelByTier(t, requestedModelID)
 		if err != nil {
 			slog.Debug("当前 tier 无可用节点，尝试下一级", "tier", t, "error", err)
 			if errors.Is(err, pool.ErrAllChannelsBusy) {
