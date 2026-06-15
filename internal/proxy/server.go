@@ -112,7 +112,6 @@ var targetPriority = map[string][]string{
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	slog.Info("📥 [Incoming Request]", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 	startTime := time.Now()
 	iw := billing.NewInterceptResponseWriter(w)
 	w = iw
@@ -145,6 +144,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	slog.Info("📥 [Incoming Request]", "method", r.Method, "path", r.URL.Path, "client_name", clientName)
 
 	var finalActualModel string
 	var finalProviderName string

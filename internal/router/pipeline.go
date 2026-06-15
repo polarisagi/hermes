@@ -175,13 +175,14 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 				ActualModel:    actualModel,
 				UserProviderID: ch.Provider.ID,
 			})
+			slog.Info("自定义路由匹配成功", "requested_model", requestedModelID, "actual_model", actualModel, "provider", ch.Provider.ProviderID, "account_name", ch.Provider.Name)
 			return ch, actualModel, nil
 		}
 		slog.Warn("自定义路由候选节点均不可用，降级至意图推断", "candidate_ids", candidateIDs)
 	}
 
 	tier, resolutionSrc := p.resolveCapabilityTier(ctx, requestedModelID)
-	slog.Info("意图解析完成", "requested_model", requestedModelID, "resolved_tier", tier, "src", resolutionSrc)
+	slog.Info("意图解析成功", "requested_model", requestedModelID, "resolved_tier", tier, "match_source", resolutionSrc)
 
 	// Tier 级联熔断链
 	var tiersToTry []string
@@ -221,6 +222,7 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 			ActualModel:    actualModel,
 			UserProviderID: ch.Provider.ID,
 		})
+		slog.Info("智能路由匹配成功", "requested_model", requestedModelID, "actual_model", actualModel, "provider", ch.Provider.ProviderID, "account_name", ch.Provider.Name)
 		return ch, actualModel, nil
 	}
 
@@ -239,12 +241,12 @@ func (p *Pipeline) resolveCapabilityTier(ctx context.Context, requestedModelID s
 
 	if userTier != "" {
 		slog.Debug("命中用户级意图字典", "tier", userTier)
-		return userTier, "user_dict"
+		return userTier, "user_dictionary"
 	}
 
 	if sysTier != "" {
 		slog.Debug("命中系统级意图字典", "tier", sysTier)
-		return sysTier, "sys_dict"
+		return sysTier, "system_dictionary"
 	}
 
 	slog.Warn("遇到未知请求模型，触发自动推断", "model", requestedModelID)
