@@ -1,0 +1,20 @@
+[server]
+# 监听的本地地址和端口
+listen_addr = "127.0.0.1:27779"
+
+# 工作目录：SQLite 数据库和日志文件的存放根目录
+work_dir = "~/.polarisagi/hermes"
+
+[database]
+# 可选：显式指定 SQLite 数据库路径。留空则在 work_dir 下自动生成 polarisagi_hermes.db
+path = ""
+
+[sync]
+# 外部模型数据缓存目录（OpenRouter / LiteLLM 同步数据落盘位置）
+data_dir = "~/.polarisagi/hermes/data/external"
+# 是否启用 Git 版本控制检测数据变更（无变化时跳过 DB 写入）
+enable_git_tracking = true
+
+[sync.siliconflow]
+enabled = false
+api_key = ""
