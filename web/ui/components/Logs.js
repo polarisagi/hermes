@@ -67,7 +67,7 @@ export default {
         };
     },
     template: `
-        <div x-show="$store.global.currentTab === 'logs'" class="max-w-6xl mx-auto flex flex-col h-full w-full relative">
+        <div x-show="$store.global.currentTab === 'logs'" class="max-w-6xl mx-auto flex flex-col w-full relative" style="height: calc(100vh - 4rem);">
             <div class="flex justify-between items-center mb-6 shrink-0">
                 <h2 class="text-3xl font-bold" x-text="$store.global.t('tab_logs_title')"></h2>
                 <div class="flex gap-3">
