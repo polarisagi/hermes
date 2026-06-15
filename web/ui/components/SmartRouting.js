@@ -93,7 +93,7 @@ export default {
             getTargetModelName(providerId, modelId) {
                 const models = Alpine.store('global').allModels || [];
                 const m = models.find(x => x.provider_id === providerId && x.model_id === modelId);
-                return m ? `${m.display_name || m.model_id} (${m.model_id}) · ${m.provider_id}` : `${modelId} · ${providerId}`;
+                return m ? `${m.model_id} · ${m.provider_id}` : `${modelId} · ${providerId}`;
             },
 
             getTierLabel(tier) {
@@ -630,7 +630,7 @@ export default {
                                                 class="select select-bordered w-full font-mono text-success">
                                             <template x-for="m in getUniqueModels()" :key="m._combo">
                                                 <option :value="m._combo"
-                                                        x-text="(m.display_name || m.model_id) + ' (' + m.model_id + ') · ' + (m._provider || 'unknown') + ' [' + (m.capability_tier || 'smart') + ']'"></option>
+                                                        x-text="m.model_id + ' · ' + (m._provider || 'unknown') + ' [' + (m.capability_tier || 'smart') + ']'"></option>
                                             </template>
                                         </select>
                                         <template x-if="routeForm.target_combo">
