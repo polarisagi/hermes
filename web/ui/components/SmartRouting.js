@@ -90,10 +90,10 @@ export default {
                 return unique;
             },
 
-            getTargetModelName(id) {
+            getTargetModelName(providerId, modelId) {
                 const models = Alpine.store('global').allModels || [];
-                const m = models.find(x => x.id === id);
-                return m ? `${m.display_name || m.model_id} (${m.model_id})` : `ID: ${id}`;
+                const m = models.find(x => x.provider_id === providerId && x.model_id === modelId);
+                return m ? `${m.display_name || m.model_id} (${m.model_id}) · ${m.provider_id}` : `${modelId} · ${providerId}`;
             },
 
             getTierLabel(tier) {
@@ -546,8 +546,8 @@ export default {
                                         </template>
                                     </td>
                                     <td>
-                                        <div class="text-sm font-medium text-success font-mono"
-                                             x-text="getTargetModelName(route.target_user_model_id)"></div>
+                                        <div class="font-mono text-sm font-semibold"
+                                             x-text="getTargetModelName(route.target_provider_id, route.target_model_id)"></div>
                                     </td>
                                     <td class="text-center">
                                         <template x-if="route.is_active">
