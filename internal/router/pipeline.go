@@ -16,11 +16,16 @@ import (
 
 var ErrNoAvailableModel = errors.New("no available model found for the requested capability tier")
 
+type TargetPlatformRoute struct {
+	ProviderID string
+	ModelID    string
+}
+
 type routePattern struct {
 	re          *regexp.Regexp
 	prefix      string
 	suffix      string
-	ids         []int
+	targets     []TargetPlatformRoute
 	specificity int
 }
 
@@ -46,9 +51,9 @@ type Pipeline struct {
 	routingLogRepo *store.RoutingLogRepo
 
 	mu               sync.RWMutex
-	customRouteMap   map[string][]int
+	customRouteMap   map[string][]TargetPlatformRoute
 	patternRoutes    []routePattern
-	wildcardRouteIDs []int
+	wildcardRoutes   []TargetPlatformRoute
 	sysIntentMap     map[string]string
 	userIntentMap    map[string]string
 }
@@ -66,7 +71,7 @@ func NewPipeline(
 		intentInferer:  intentInferer,
 		chanManager:    chanManager,
 		routingLogRepo: routingLogRepo,
-		customRouteMap: make(map[string][]int),
+		customRouteMap: make(map[string][]TargetPlatformRoute),
 		sysIntentMap:   make(map[string]string),
 		userIntentMap:  make(map[string]string),
 	}
@@ -74,9 +79,9 @@ func NewPipeline(
 
 // Reload 从数据库全量加载缓存，启动时和配置变更后调用
 func (p *Pipeline) Reload(ctx context.Context) error {
-	newCustomRouteMap := make(map[string][]int)
+	newCustomRouteMap := make(map[string][]TargetPlatformRoute)
 	patternMap := make(map[string]*routePattern)
-	var newWildcardIDs []int
+	var newWildcardRoutes []TargetPlatformRoute
 
 	routes, err := p.routeRepo.GetUserCustomRoutes(ctx)
 	if err != nil {
@@ -84,11 +89,13 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 	} else {
 		for _, r := range routes {
 			pat := r.RequestedModelID
+			target := TargetPlatformRoute{ProviderID: r.TargetProviderID, ModelID: r.TargetModelID}
+
 			if pat == "*" {
-				newWildcardIDs = append(newWildcardIDs, r.TargetUserModelID)
+				newWildcardRoutes = append(newWildcardRoutes, target)
 			} else if strings.ContainsAny(pat, "^$|()[]+") {
 				if rp, exists := patternMap[pat]; exists {
-					rp.ids = append(rp.ids, r.TargetUserModelID)
+					rp.targets = append(rp.targets, target)
 				} else {
 					re, err := regexp.Compile(pat)
 					if err != nil {
@@ -96,8 +103,8 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 					} else {
 						patternMap[pat] = &routePattern{
 							re:          re,
-							ids:         []int{r.TargetUserModelID},
-							specificity: 1000, // 正则匹配具有较高优先级
+							targets:     []TargetPlatformRoute{target},
+							specificity: 1000,
 						}
 					}
 				}
@@ -105,17 +112,17 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 				idx := strings.Index(pat, "*")
 				prefix, suffix := pat[:idx], pat[idx+1:]
 				if rp, exists := patternMap[pat]; exists {
-					rp.ids = append(rp.ids, r.TargetUserModelID)
+					rp.targets = append(rp.targets, target)
 				} else {
 					patternMap[pat] = &routePattern{
 						prefix:      prefix,
 						suffix:      suffix,
-						ids:         []int{r.TargetUserModelID},
+						targets:     []TargetPlatformRoute{target},
 						specificity: len(prefix) + len(suffix),
 					}
 				}
 			} else {
-				newCustomRouteMap[pat] = append(newCustomRouteMap[pat], r.TargetUserModelID)
+				newCustomRouteMap[pat] = append(newCustomRouteMap[pat], target)
 			}
 		}
 	}
@@ -143,7 +150,7 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 	p.mu.Lock()
 	p.customRouteMap = newCustomRouteMap
 	p.patternRoutes = newPatternRoutes
-	p.wildcardRouteIDs = newWildcardIDs
+	p.wildcardRoutes = newWildcardRoutes
 	p.sysIntentMap = newSysIntentMap
 	p.userIntentMap = newUserIntentMap
 	p.mu.Unlock()
@@ -151,7 +158,7 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 	slog.Info("路由缓存热重载完成",
 		"exact_routes", len(newCustomRouteMap),
 		"pattern_routes", len(newPatternRoutes),
-		"wildcard", len(newWildcardIDs) > 0,
+		"wildcard", len(newWildcardRoutes) > 0,
 		"sys_intents", len(newSysIntentMap),
 		"user_intents", len(newUserIntentMap),
 	)
@@ -163,22 +170,27 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 	slog.Debug("启动 4 级智能路由管线", "requested_model", requestedModelID)
 
 	// [优先级 1] 自定义硬路由
-	if candidateIDs := p.checkCustomRoute(requestedModelID); len(candidateIDs) > 0 {
-		slog.Debug("命中自定义硬路由", "candidate_ids", candidateIDs)
-		ch, actualModel, err := p.chanManager.SelectBestChannelByUserModelIDs(candidateIDs)
-		if err == nil {
-			p.routingLogRepo.SaveAsync(&domain.RoutingLog{
-				RequestedModel: requestedModelID,
-				ResolvedTier:   "custom",
-				ResolutionSrc:  "custom_route",
-				ProviderName:   ch.Provider.ProviderID,
-				ActualModel:    actualModel,
-				UserProviderID: ch.Provider.ID,
-			})
-			slog.Info("自定义路由匹配成功", "requested_model", requestedModelID, "actual_model", actualModel, "provider", ch.Provider.ProviderID, "account_name", ch.Provider.Name)
-			return ch, actualModel, nil
+	if targets := p.checkCustomRoute(requestedModelID); len(targets) > 0 {
+		slog.Debug("命中自定义硬路由", "targets", targets)
+		
+		var lastRouteErr error
+		for _, target := range targets {
+			ch, actualModel, err := p.chanManager.SelectBestChannelByProviderAndModel(target.ProviderID, target.ModelID)
+			if err == nil {
+				p.routingLogRepo.SaveAsync(&domain.RoutingLog{
+					RequestedModel: requestedModelID,
+					ResolvedTier:   "custom",
+					ResolutionSrc:  "custom_route",
+					ProviderName:   ch.Provider.ProviderID,
+					ActualModel:    actualModel,
+					UserProviderID: ch.Provider.ID,
+				})
+				slog.Info("自定义路由匹配成功", "requested_model", requestedModelID, "actual_model", actualModel, "provider", ch.Provider.ProviderID, "account_name", ch.Provider.Name)
+				return ch, actualModel, nil
+			}
+			lastRouteErr = err
 		}
-		slog.Warn("自定义路由候选节点均不可用，降级至意图推断", "candidate_ids", candidateIDs)
+		slog.Warn("自定义路由候选节点均不可用，降级至意图推断", "targets", targets, "last_err", lastRouteErr)
 	}
 
 	tier, resolutionSrc := p.resolveCapabilityTier(ctx, requestedModelID)
@@ -260,19 +272,19 @@ func (p *Pipeline) resolveCapabilityTier(ctx context.Context, requestedModelID s
 	return inferredTier, src
 }
 
-func (p *Pipeline) checkCustomRoute(requestedModelID string) []int {
+func (p *Pipeline) checkCustomRoute(requestedModelID string) []TargetPlatformRoute {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if ids, ok := p.customRouteMap[requestedModelID]; ok && len(ids) > 0 {
-		return ids
+	if targets, ok := p.customRouteMap[requestedModelID]; ok && len(targets) > 0 {
+		return targets
 	}
 
 	for i := range p.patternRoutes {
 		if p.patternRoutes[i].match(requestedModelID) {
-			return p.patternRoutes[i].ids
+			return p.patternRoutes[i].targets
 		}
 	}
 
-	return p.wildcardRouteIDs
+	return p.wildcardRoutes
 }

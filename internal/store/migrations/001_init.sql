@@ -130,12 +130,12 @@ CREATE TABLE IF NOT EXISTS user_model_intent_dict (
 CREATE TABLE IF NOT EXISTS user_custom_routes (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     requested_model_id   VARCHAR NOT NULL,
-    target_user_model_id INTEGER NOT NULL,
-    is_active            BOOLEAN DEFAULT 1,
-    FOREIGN KEY(target_user_model_id) REFERENCES user_models(id)
+    target_provider_id   VARCHAR NOT NULL,
+    target_model_id      VARCHAR NOT NULL,
+    is_active            BOOLEAN DEFAULT 1
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ucr_req_target
-    ON user_custom_routes(requested_model_id, target_user_model_id);
+    ON user_custom_routes(requested_model_id, target_provider_id, target_model_id);
 
 -- ============================================================
 -- SECTION 3: DDL — 运营层（日志 / 计费 / 配置）

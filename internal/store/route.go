@@ -14,7 +14,12 @@ func NewRouteRepo() *RouteRepo {
 }
 
 func (r *RouteRepo) GetUserCustomRoutes(ctx context.Context) ([]domain.UserCustomRoute, error) {
-	rows, err := DB().QueryContext(ctx, `SELECT id, requested_model_id, target_user_model_id, is_active FROM user_custom_routes WHERE is_active = 1`)
+	query := `
+		SELECT id, requested_model_id, target_provider_id, target_model_id, is_active
+		FROM user_custom_routes
+		WHERE is_active = 1
+	`
+	rows, err := DB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +28,7 @@ func (r *RouteRepo) GetUserCustomRoutes(ctx context.Context) ([]domain.UserCusto
 	var routes []domain.UserCustomRoute
 	for rows.Next() {
 		var rt domain.UserCustomRoute
-		if err := rows.Scan(&rt.ID, &rt.RequestedModelID, &rt.TargetUserModelID, &rt.IsActive); err != nil {
+		if err := rows.Scan(&rt.ID, &rt.RequestedModelID, &rt.TargetProviderID, &rt.TargetModelID, &rt.IsActive); err != nil {
 			return nil, err
 		}
 		routes = append(routes, rt)
@@ -32,7 +37,7 @@ func (r *RouteRepo) GetUserCustomRoutes(ctx context.Context) ([]domain.UserCusto
 }
 
 func (r *RouteRepo) GetAllUserCustomRoutes(ctx context.Context) ([]domain.UserCustomRoute, error) {
-	rows, err := DB().QueryContext(ctx, `SELECT id, requested_model_id, target_user_model_id, is_active FROM user_custom_routes ORDER BY id ASC`)
+	rows, err := DB().QueryContext(ctx, `SELECT id, requested_model_id, target_provider_id, target_model_id, is_active FROM user_custom_routes ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +46,7 @@ func (r *RouteRepo) GetAllUserCustomRoutes(ctx context.Context) ([]domain.UserCu
 	var routes []domain.UserCustomRoute
 	for rows.Next() {
 		var rt domain.UserCustomRoute
-		if err := rows.Scan(&rt.ID, &rt.RequestedModelID, &rt.TargetUserModelID, &rt.IsActive); err != nil {
+		if err := rows.Scan(&rt.ID, &rt.RequestedModelID, &rt.TargetProviderID, &rt.TargetModelID, &rt.IsActive); err != nil {
 			return nil, err
 		}
 		routes = append(routes, rt)
@@ -52,8 +57,8 @@ func (r *RouteRepo) GetAllUserCustomRoutes(ctx context.Context) ([]domain.UserCu
 func (r *RouteRepo) CreateUserCustomRoute(ctx context.Context, rt *domain.UserCustomRoute) error {
 	return ExecuteWrite(func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO user_custom_routes (requested_model_id, target_user_model_id, is_active) VALUES (?, ?, ?)`,
-			rt.RequestedModelID, rt.TargetUserModelID, rt.IsActive)
+			`INSERT INTO user_custom_routes (requested_model_id, target_provider_id, target_model_id, is_active) VALUES (?, ?, ?, ?)`,
+			rt.RequestedModelID, rt.TargetProviderID, rt.TargetModelID, rt.IsActive)
 		if err != nil {
 			return err
 		}
@@ -68,8 +73,8 @@ func (r *RouteRepo) CreateUserCustomRoute(ctx context.Context, rt *domain.UserCu
 func (r *RouteRepo) UpdateUserCustomRoute(ctx context.Context, rt *domain.UserCustomRoute) error {
 	return ExecuteWrite(func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			`UPDATE user_custom_routes SET requested_model_id = ?, target_user_model_id = ?, is_active = ? WHERE id = ?`,
-			rt.RequestedModelID, rt.TargetUserModelID, rt.IsActive, rt.ID)
+			`UPDATE user_custom_routes SET requested_model_id = ?, target_provider_id = ?, target_model_id = ?, is_active = ? WHERE id = ?`,
+			rt.RequestedModelID, rt.TargetProviderID, rt.TargetModelID, rt.IsActive, rt.ID)
 		return err
 	})
 }

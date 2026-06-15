@@ -9,7 +9,7 @@ export default {
             routeForm: {
                 id: 0,
                 requested_model_id: '',
-                target_user_model_id: 0,
+                target_combo: '',
                 is_active: true
             },
 
@@ -74,7 +74,6 @@ export default {
                 const models = Alpine.store('global').allModels || [];
                 const nodes = Alpine.store('global').nodes || [];
                 const seen = new Set();
-                const currentId = parseInt(this.routeForm.target_user_model_id, 10);
                 const unique = [];
 
                 const getProviderId = (userProviderId) => {
@@ -82,21 +81,14 @@ export default {
                     return node ? node.provider_id : 'unknown';
                 };
 
-                // 保留当前已选的模型（防止编辑时被去重掉导致无法回显）
-                const currentModel = models.find(m => m.id === currentId);
-                if (currentModel) {
-                    currentModel._provider = getProviderId(currentModel.user_provider_id);
-                    unique.push(currentModel);
-                    seen.add(`${currentModel._provider}-${currentModel.model_id}-${currentModel.capability_tier}`);
-                }
-
-                // 添加其他唯一模型（按 厂商 + 模型ID 去重展示）
+                // 添加唯一模型（按 厂商 + 模型ID 去重展示）
                 for (const m of models) {
                     const pid = getProviderId(m.user_provider_id);
-                    const key = `${pid}-${m.model_id}-${m.capability_tier}`;
+                    const key = `${pid}|${m.model_id}`;
                     if (!seen.has(key)) {
                         seen.add(key);
                         m._provider = pid;
+                        m._combo = key;
                         unique.push(m);
                     }
                 }
@@ -205,7 +197,6 @@ export default {
             // ─── Pro Mode: Route Modal ────────────────────────────────────────
 
             openRouteModal(route = null) {
-                const models = Alpine.store('global').allModels || [];
                 if (route) {
                     const rid = route.requested_model_id || '';
                     if (rid === '*') {
@@ -221,17 +212,19 @@ export default {
                     this.routeForm = {
                         id: route.id,
                         requested_model_id: rid,
-                        target_user_model_id: route.target_user_model_id || 0,
+                        target_combo: (route.target_provider_id && route.target_model_id) ? `${route.target_provider_id}|${route.target_model_id}` : '',
                         is_active: route.is_active
                     };
                     this.routeModal = { show: true, isEdit: true };
                 } else {
                     this.sourceMode = 'tier';
                     this.selectedTier = 'smart';
+                    const unique = this.getUniqueModels();
+                    const combo = unique.length > 0 ? unique[0]._combo : '';
                     this.routeForm = {
                         id: 0,
                         requested_model_id: 'smart',
-                        target_user_model_id: models.length > 0 ? models[0].id : 0,
+                        target_combo: combo,
                         is_active: true
                     };
                     this.routeModal = { show: true, isEdit: false };
@@ -273,17 +266,19 @@ export default {
                     gStore.showToast(gStore.t('err_empty_mapping') || '源模型不能为空', 'error');
                     return;
                 }
-                if (!this.routeForm.target_user_model_id) {
+                if (!this.routeForm.target_combo) {
                     gStore.showToast(gStore.t('err_empty_protocols') || '目标模型不能为空', 'error');
                     return;
                 }
+                const [pid, mid] = this.routeForm.target_combo.split('|');
 
                 try {
                     const method = this.routeModal.isEdit ? 'PUT' : 'POST';
                     const payload = {
                         id: this.routeForm.id,
                         requested_model_id: reqModel,
-                        target_user_model_id: parseInt(this.routeForm.target_user_model_id, 10),
+                        target_provider_id: pid,
+                        target_model_id: mid,
                         is_active: this.routeForm.is_active === true || this.routeForm.is_active === 'true' || this.routeForm.is_active === 1
                     };
                     const res = await fetch('/api/admin/smart_routings', {
@@ -637,23 +632,23 @@ export default {
 
                                 <template x-if="$store.global.allModels && $store.global.allModels.length > 0">
                                     <div class="space-y-2">
-                                        <select name="routeForm_target_user_model_id" x-model="routeForm.target_user_model_id"
+                                        <select name="routeForm_target_combo" x-model="routeForm.target_combo"
                                                 class="select select-bordered w-full font-mono text-success">
-                                            <template x-for="m in getUniqueModels()" :key="m.id">
-                                                <option :value="m.id"
+                                            <template x-for="m in getUniqueModels()" :key="m._combo">
+                                                <option :value="m._combo"
                                                         x-text="(m.display_name || m.model_id) + ' (' + m.model_id + ') · ' + (m._provider || 'unknown') + ' [' + (m.capability_tier || 'smart') + ']'"></option>
                                             </template>
                                         </select>
-                                        <template x-if="routeForm.target_user_model_id">
+                                        <template x-if="routeForm.target_combo">
                                             <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-base-200/60 border border-base-300/50">
                                                 <span class="text-xs text-base-content/50" x-text="$store.global.t('selected') || '已选：'"></span>
-                                                <template x-for="m in $store.global.allModels.filter(x => x.id == routeForm.target_user_model_id)" :key="m.id">
+                                                <template x-for="m in getUniqueModels().filter(x => x._combo === routeForm.target_combo)" :key="m._combo">
                                                     <div class="flex items-center gap-2">
                                                         <span class="badge badge-sm font-mono"
                                                               :class="getModelTierBadge(m.capability_tier)"
                                                               x-text="m.capability_tier || 'smart'"></span>
                                                         <span class="font-mono text-success text-sm font-bold" x-text="m.model_id"></span>
-                                                        <span class="text-xs text-base-content/40" x-text="'(ID: ' + m.id + ')'"></span>
+                                                        <span class="text-xs text-base-content/40" x-text="m._provider"></span>
                                                     </div>
                                                 </template>
                                             </div>

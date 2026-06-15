@@ -4,10 +4,11 @@ import "time"
 
 // UserCustomRoute 专业模式：强制 1对1 路由
 type UserCustomRoute struct {
-	ID                int    `json:"id"`
-	RequestedModelID  string `json:"requested_model_id"`   // 客户端请求的模型，如 "gpt-4o"
-	TargetUserModelID int    `json:"target_user_model_id"` // 强制绑定的后台 UserModels 的 ID
-	IsActive          bool   `json:"is_active"`
+	ID               int    `json:"id"`
+	RequestedModelID string `json:"requested_model_id"` // 客户端请求的模型，如 "gpt-4o"
+	TargetProviderID string `json:"target_provider_id"` // 目标厂商 ID，如 "google"
+	TargetModelID    string `json:"target_model_id"`    // 目标模型 ID，如 "gemini-1.5-pro"
+	IsActive         bool   `json:"is_active"`
 }
 
 // RoutingLog 路由决策日志（独立于计费，供透明层 UI 展示和用户调整）

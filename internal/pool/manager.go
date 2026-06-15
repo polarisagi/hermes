@@ -367,22 +367,21 @@ func (m *Manager) SelectBestChannelByTier(tier string, requestedModelID string) 
 	})
 }
 
-// SelectBestChannelByUserModelIDs 专业模式负载均衡：在指定 user_model_id 集合内选最优渠道
-func (m *Manager) SelectBestChannelByUserModelIDs(userModelIDs []int) (*ActiveChannel, string, error) {
-	if len(userModelIDs) == 0 {
+// SelectBestChannelByProviderAndModel 专业模式负载均衡：在指定厂商和模型内选最优渠道
+func (m *Manager) SelectBestChannelByProviderAndModel(providerID, modelID string) (*ActiveChannel, string, error) {
+	if providerID == "" || modelID == "" {
 		return nil, "", ErrChannelNotFound
 	}
 
-	idSet := make(map[int]struct{}, len(userModelIDs))
-	for _, id := range userModelIDs {
-		idSet[id] = struct{}{}
-	}
-
 	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
+		if ch.Provider.ProviderID != providerID {
+			return "", SysModelCacheInfo{}, 0, false
+		}
+
 		var bestMod *domain.UserModel
 		for i := range ch.Models {
 			mod := &ch.Models[i]
-			if _, ok := idSet[mod.ID]; ok && mod.IsActive {
+			if mod.ModelID == modelID && mod.IsActive {
 				if bestMod == nil {
 					bestMod = mod
 				} else {
