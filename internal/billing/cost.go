@@ -86,10 +86,17 @@ func CalculateCost(provider, modelName string, promptTokens, candidateTokens, ca
 	}
 
 	// 如果是通过 Vertex AI 渠道调用 Gemini，部分模型价格更贵（覆盖 AI Studio 价格）
-	if provider == "google" {
-		if strings.Contains(modelName, "gemini-2.0-flash") {
-			promptRate = 0.15
-			candidateRate = 0.60
+	if provider == "google" || provider == "agent_platform" {
+		if strings.Contains(modelName, "gemini-") {
+			if strings.Contains(modelName, "flash") {
+				// Vertex AI Gemini Flash 价格: 0.075 / 1M input, 0.30 / 1M output
+				promptRate = 0.000075
+				candidateRate = 0.00030
+			} else if strings.Contains(modelName, "pro") {
+				// Vertex AI Gemini Pro 价格: 1.25 / 1M input, 5.0 / 1M output
+				promptRate = 0.00125
+				candidateRate = 0.0050
+			}
 		}
 	}
 
