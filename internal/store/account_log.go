@@ -46,21 +46,30 @@ type DashboardStat struct {
 	CompletionTokens int64   `json:"completion_tokens"`
 	ErrorCount       int     `json:"error_count"`
 	SuccessCount     int     `json:"success_count"`
+	Balance          float64 `json:"balance"`
+	LimitPercent     float64 `json:"limit_percent"`
+	ValidFrom        string  `json:"valid_from"`
+	CycleCostUSD     float64 `json:"cycle_cost_usd"`
 }
 
 func (r *AccountLogRepo) GetDashboardStats(ctx context.Context, start, end string) ([]DashboardStat, error) {
 	query := `
 		SELECT 
-			COALESCE(NULLIF(account_name, ''), 'Default') as account,
-			COALESCE(NULLIF(api_protocol, ''), 'UNDEFINED') as platform,
-			SUM(cost) as period_cost_usd,
-			SUM(prompt_tokens) as prompt_tokens,
-			SUM(completion_tokens) as completion_tokens,
-			SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as error_count,
-			SUM(CASE WHEN status_code < 400 THEN 1 ELSE 0 END) as success_count
-		FROM account_logs
-		WHERE date(created_at) >= date(?) AND date(created_at) <= date(?)
-		GROUP BY account_name, api_protocol
+			COALESCE(NULLIF(al.account_name, ''), 'Default') as account,
+			COALESCE(NULLIF(al.api_protocol, ''), 'UNDEFINED') as platform,
+			SUM(al.cost) as period_cost_usd,
+			SUM(al.prompt_tokens) as prompt_tokens,
+			SUM(al.completion_tokens) as completion_tokens,
+			SUM(CASE WHEN al.status_code >= 400 THEN 1 ELSE 0 END) as error_count,
+			SUM(CASE WHEN al.status_code < 400 THEN 1 ELSE 0 END) as success_count,
+			MAX(up.balance) as balance,
+			MAX(up.limit_percent) as limit_percent,
+			MAX(up.valid_from) as valid_from,
+			MAX(up.used_amount) as cycle_cost_usd
+		FROM account_logs al
+		LEFT JOIN user_providers up ON al.account_name = up.name
+		WHERE date(al.created_at) >= date(?) AND date(al.created_at) <= date(?)
+		GROUP BY al.account_name, al.api_protocol
 	`
 	rows, err := DB().QueryContext(ctx, query, start, end)
 	if err != nil {
@@ -71,9 +80,10 @@ func (r *AccountLogRepo) GetDashboardStats(ctx context.Context, start, end strin
 	var stats []DashboardStat
 	for rows.Next() {
 		var s DashboardStat
-		var cost, prompt, comp *float64
+		var cost, prompt, comp, balance, limit, cycle *float64
 		var errCnt, succCnt *int
-		if err := rows.Scan(&s.Account, &s.Platform, &cost, &prompt, &comp, &errCnt, &succCnt); err != nil {
+		var validFrom sql.NullString
+		if err := rows.Scan(&s.Account, &s.Platform, &cost, &prompt, &comp, &errCnt, &succCnt, &balance, &limit, &validFrom, &cycle); err != nil {
 			return nil, err
 		}
 		if cost != nil {
@@ -90,6 +100,18 @@ func (r *AccountLogRepo) GetDashboardStats(ctx context.Context, start, end strin
 		}
 		if succCnt != nil {
 			s.SuccessCount = *succCnt
+		}
+		if balance != nil {
+			s.Balance = *balance
+		}
+		if limit != nil {
+			s.LimitPercent = *limit
+		}
+		if validFrom.Valid {
+			s.ValidFrom = validFrom.String
+		}
+		if cycle != nil {
+			s.CycleCostUSD = *cycle
 		}
 		stats = append(stats, s)
 	}
