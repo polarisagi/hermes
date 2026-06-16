@@ -25,7 +25,7 @@ func ProcessBilling(
 	errorMsg string,
 	reqMethod string,
 	reqPath string,
-) {
+) float64 {
 	promptTokens := int64(upstreamPromptTokens)
 	completionTokens := int64(upstreamCompletionTokens)
 	cachedTokens := int64(upstreamCachedTokens)
@@ -82,4 +82,6 @@ func ProcessBilling(
 	}
 
 	store.GetAccountLogRepo().SaveAsync(logEntry)
+	
+	return cost
 }

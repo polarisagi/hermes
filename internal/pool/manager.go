@@ -183,8 +183,14 @@ func (m *Manager) Reload(ctx context.Context) error {
 			Status:    StatusIdle,
 		}
 
-		if ch.Provider.Balance > 0 && ch.Provider.UsedAmount >= ch.Provider.Balance {
-			ch.Status = StatusExhausted
+		if ch.Provider.Balance > 0 {
+			limit := ch.Provider.Balance
+			if ch.Provider.LimitPercent > 0 {
+				limit = limit * float64(ch.Provider.LimitPercent) / 100.0
+			}
+			if ch.Provider.UsedAmount >= limit {
+				ch.Status = StatusExhausted
+			}
 		}
 
 		newChannels[p.ID] = ch
@@ -493,4 +499,36 @@ func (m *Manager) GetStats() (active, waiting, max int) {
 	}
 	// 目前没有明确的排队等待队列机制，返回0
 	return active, 0, max
+}
+
+// AddUsage updates the provider's used amount in memory, checks the limit, and triggers an async DB update.
+func (m *Manager) AddUsage(providerID int, cost float64) {
+	if cost <= 0 {
+		return
+	}
+
+	m.mu.RLock()
+	ch, exists := m.channels[providerID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	ch.mu.Lock()
+	ch.Provider.UsedAmount += cost
+	
+	if ch.Provider.Balance > 0 {
+		limit := ch.Provider.Balance
+		if ch.Provider.LimitPercent > 0 {
+			limit = limit * float64(ch.Provider.LimitPercent) / 100.0
+		}
+		if ch.Provider.UsedAmount >= limit && ch.Status != StatusExhausted {
+			ch.Status = StatusExhausted
+			slog.Warn("渠道由于余额耗尽或达到百分比限制，已自动被禁用", "channel", ch.Provider.Name, "used", ch.Provider.UsedAmount, "limit", limit)
+		}
+	}
+	ch.mu.Unlock()
+
+	m.providerRepo.IncrementUsedAmountAsync(providerID, cost)
 }

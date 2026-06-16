@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/polarisagi/hermes/internal/domain"
 )
@@ -287,6 +288,30 @@ func (r *ProviderRepo) InsertSysProviderIfNotExists(ctx context.Context, p *doma
 			`INSERT OR IGNORE INTO sys_providers (provider_id, provider_name, display_order) VALUES (?, ?, 999)`,
 			p.ProviderID, p.ProviderName,
 		)
+		return err
+	})
+}
+
+// IncrementUsedAmountAsync increments the used_amount of a provider asynchronously, and disables it if the limit is reached.
+func (r *ProviderRepo) IncrementUsedAmountAsync(providerID int, cost float64) {
+	if cost <= 0 {
+		return
+	}
+	query := `
+		UPDATE user_providers
+		SET used_amount = used_amount + ?,
+			status = CASE 
+			   WHEN limit_percent > 0 AND balance > 0 AND (used_amount + ?) >= (balance * limit_percent / 100.0) THEN -1
+			   WHEN limit_percent = 0 AND balance > 0 AND (used_amount + ?) >= balance THEN -1
+			   ELSE status
+			END
+		WHERE id = ? AND status > 0
+	`
+	ExecuteWriteAsync(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), query, cost, cost, cost, providerID)
+		if err != nil {
+			slog.Warn("更新渠道余额与状态失败", "provider_id", providerID, "cost", cost, "error", err)
+		}
 		return err
 	})
 }

@@ -151,6 +151,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var finalProviderName string
 	var finalAccountName string
 	var finalAPIProtocol string
+	var finalProviderID int
 
 	var finalReqBody []byte
 	var finalReqModel string
@@ -163,7 +164,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		latencyMs := int(time.Since(startTime).Milliseconds())
 		p, c, cache, content := iw.GetTokens()
 
-		billing.ProcessBilling(
+		cost := billing.ProcessBilling(
 			finalProviderName,
 			finalAccountName,
 			finalAPIProtocol,
@@ -181,6 +182,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Method,
 			r.URL.Path,
 		)
+		if cost > 0 && finalProviderID > 0 {
+			s.chanManager.AddUsage(finalProviderID, cost)
+		}
 	}()
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -291,6 +295,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if activeChan != nil && activeChan.Provider != nil {
 			finalProviderName = activeChan.Provider.ProviderID
 			finalAccountName = activeChan.Provider.Name
+			finalProviderID = activeChan.Provider.ID
 		}
 		if err != nil {
 			if errors.Is(err, pool.ErrAllChannelsBusy) && attempt < maxRetries {
