@@ -487,7 +487,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// 5. 成功
 		s.chanManager.ReportSuccess(activeChan)
-		s.chanManager.ReleaseChannel(activeChan)
+		// 关键修复：必须使用 defer 释放通道并发数！
+		// 大模型的流式响应可能会持续几十秒，如果不 defer，网关会在此刻（仅收到 HTTP 头）
+		// 就认为连接结束并释放并发坑位，导致系统在流未结束时就将下一个请求派发给该账号，
+		// 从而引发上游 Google API 的 429 并发超限错误。
+		defer s.chanManager.ReleaseChannel(activeChan)
 
 		// 6. 翻译响应
 		// 注入原始请求体到 context 中，供翻译器判断 isCompact 和预估 tokens
