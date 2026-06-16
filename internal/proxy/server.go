@@ -275,10 +275,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	finalReqModel = modelName
 	finalReqBody = bodyBytes
 
-	maxRetries := 3
+	maxRetries := 1 // Limit to 1 retry (2 attempts total) for faster failover
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Check if the client already cancelled the request before trying
+		if err := r.Context().Err(); err != nil {
+			slog.Warn("客户端已主动断开连接，中止重试", "attempt", attempt, "error", err)
+			lastErr = err
+			break
+		}
+
 		activeChan, actualModel, err := s.pipeline.RouteRequest(r.Context(), modelName)
 		finalActualModel = actualModel
 		if activeChan != nil && activeChan.Provider != nil {
@@ -288,7 +295,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if errors.Is(err, pool.ErrAllChannelsBusy) && attempt < maxRetries {
 				slog.Warn("所有可用渠道均繁忙，等待重试", "attempt", attempt, "model", modelName)
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(3 * time.Second) // 优化：提升至 3 秒，为 LLM 的长流并发释放争取更大时间窗口
 				lastErr = err
 				continue
 			}
@@ -392,7 +399,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			targetURL = translate.BuildTargetURL(activeChan.Provider, targetEndpoint, targetPath)
 		}
 
-		proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+		// Apply channel-specific timeout (default 180s) to prevent infinite hangs
+		timeoutSec := activeChan.Provider.TimeoutSec
+		if timeoutSec <= 0 {
+			timeoutSec = 180
+		}
+		
+		reqCtx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSec)*time.Second)
+		// Defer cancellation. In a loop, multiple defers will accumulate, 
+		// but since maxRetries is 1, it's at most 2 defers, which is safe.
+		defer cancel()
+
+		proxyReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
 		if err != nil {
 			s.chanManager.ReleaseChannel(activeChan)
 			skipBilling = true
