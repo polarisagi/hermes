@@ -196,6 +196,7 @@ export default {
                         project_id: origCreds.project_id || '',
                         location: origCreds.region || 'global',
                         limit_percent: node.limit_percent !== undefined ? node.limit_percent : 90.0,
+                        timeout_sec: node.timeout_sec !== undefined ? node.timeout_sec : 600,
                         valid_from: this.toDatetimeLocal(node.valid_from),
                         valid_to: this.toDatetimeLocal(node.valid_to),
                     };
@@ -204,7 +205,7 @@ export default {
                     const today = this.todayPrefix();
                     this.nodeForm = {
                         id: 0, provider: 'openai', name: '', credentials: '', project_id: '', location: 'global', base_url: '',
-                        priority: 10, limit_percent: 90.0, balance: 0.0, min_request_interval_sec: 0, concurrency: 0,
+                        priority: 10, limit_percent: 90.0, balance: 0.0, min_request_interval_sec: 0, concurrency: 0, timeout_sec: 600,
                         valid_from: `${today}T00:00:00`, valid_to: `2099-12-31T23:59:59`, status: 1
                     };
                     this.nodeModal = { show: true, isEdit: false };
@@ -232,6 +233,10 @@ export default {
                 }
                 if (form.concurrency < 0 || form.concurrency > 1000) {
                     gStore.showToast('并发限制必须在 0 到 1000 之间', 'error');
+                    return;
+                }
+                if (form.timeout_sec < 1) {
+                    gStore.showToast('超时时间必须大于 0', 'error');
                     return;
                 }
 
@@ -263,6 +268,7 @@ export default {
                         provider_id: form.provider,
                         auth_credentials: authCreds,
                         concurrency_limit: form.concurrency,
+                        timeout_sec: form.timeout_sec,
                         min_interval_sec: form.min_request_interval_sec,
                         valid_from: this.fromDatetimeLocal(form.valid_from),
                         valid_to: this.fromDatetimeLocal(form.valid_to)
@@ -601,6 +607,12 @@ export default {
                                         <div class="label"><span class="label-text">Concurrency (并发限制)</span></div>
                                         <input name="nodeForm_concurrency" x-model.number="nodeForm.concurrency" type="number" min="0" max="1000" class="input input-bordered input-sm w-full">
                                         <div class="label"><span class="label-text-alt text-base-content/50">0 为无限制，上限 1000</span></div>
+                                    </label>
+                                <div class="grid grid-cols-2 gap-4 mt-4">
+                                    <label class="form-control w-full">
+                                        <div class="label"><span class="label-text" x-text="$store.global.lang === 'zh' ? 'Timeout (超时时间)' : 'Timeout (sec)'"></span></div>
+                                        <input name="nodeForm_timeout_sec" x-model.number="nodeForm.timeout_sec" type="number" min="1" class="input input-bordered input-sm w-full">
+                                        <div class="label"><span class="label-text-alt text-base-content/50" x-text="$store.global.lang === 'zh' ? '请求超时秒数 (推理模型推荐 600)' : 'Request timeout in seconds (600 recommended)'"></span></div>
                                     </label>
                                 </div>
                             </template>
