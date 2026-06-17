@@ -607,6 +607,11 @@ func (m *Manager) selectBestWithWait(ctx context.Context, clientID string, filte
 	atomic.AddInt64(&m.waitingCount, 1)
 	defer atomic.AddInt64(&m.waitingCount, -1)
 
+	// ⚠️ 关键：入队后必须立即唤醒调度器！
+	// 若调度器之前因队列为空而进入长睡眠（最长 1 小时），
+	// 不通知它的话新请求会一直等到超时才被感知。
+	m.notifyDispatcher()
+
 	slog.Info("请求进入公平排队队列",
 		"client", clientID,
 		"client_queue_pos", clientQueueLen,
