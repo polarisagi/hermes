@@ -444,13 +444,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 4. 发送请求
 		resp, err := httpclient.Client.Do(proxyReq)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
-				slog.Warn("请求被取消或超时", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
+			// 如果客户端主动断开连接，直接退出
+			if r.Context().Err() != nil {
+				slog.Warn("客户端主动断开或请求取消", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
 				s.chanManager.ReleaseChannel(activeChan)
 				return
 			}
-			slog.Warn("上游请求网络错误，准备重试", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
-			s.chanManager.ReportError(activeChan, 502)
+
+			// 如果是上游导致的网络错误或超时，进行重试
+			if errors.Is(err, context.DeadlineExceeded) {
+				slog.Warn("上游请求超时，准备重试", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
+				s.chanManager.ReportError(activeChan, http.StatusGatewayTimeout)
+			} else {
+				slog.Warn("上游请求网络错误，准备重试", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
+				s.chanManager.ReportError(activeChan, http.StatusBadGateway)
+			}
 			s.chanManager.ReleaseChannel(activeChan)
 			lastErr = err
 			continue
