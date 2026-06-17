@@ -235,8 +235,8 @@ export default {
                     gStore.showToast('并发限制必须在 0 到 1000 之间', 'error');
                     return;
                 }
-                if (form.timeout_sec < 1) {
-                    gStore.showToast('超时时间必须大于 0', 'error');
+                if (form.timeout_sec < 60) {
+                    gStore.showToast('超时时间太短，必须至少为 60 秒', 'error');
                     return;
                 }
 
@@ -611,7 +611,7 @@ export default {
                                 <div class="grid grid-cols-2 gap-4 mt-4">
                                     <label class="form-control w-full">
                                         <div class="label"><span class="label-text" x-text="$store.global.lang === 'zh' ? 'Timeout (超时时间)' : 'Timeout (sec)'"></span></div>
-                                        <input name="nodeForm_timeout_sec" x-model.number="nodeForm.timeout_sec" type="number" min="1" class="input input-bordered input-sm w-full">
+                                        <input name="nodeForm_timeout_sec" x-model.number="nodeForm.timeout_sec" type="number" min="60" class="input input-bordered input-sm w-full">
                                         <div class="label"><span class="label-text-alt text-base-content/50" x-text="$store.global.lang === 'zh' ? '请求超时秒数 (推理模型推荐 600)' : 'Request timeout in seconds (600 recommended)'"></span></div>
                                     </label>
                                 </div>
