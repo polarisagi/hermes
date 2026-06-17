@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS sys_providers (
     provider_id   VARCHAR PRIMARY KEY,
     provider_name VARCHAR NOT NULL,
     description   TEXT,
-    display_order INTEGER DEFAULT 0
+    display_order INTEGER DEFAULT 0,
+    default_concurrency INTEGER DEFAULT 0,
+    default_timeout_sec INTEGER DEFAULT 600
 );
 
 -- 接入端点字典（每个厂商可有多个协议端点）
@@ -78,7 +80,7 @@ CREATE TABLE IF NOT EXISTS user_providers (
     weight           INTEGER DEFAULT 100,
     concurrency_limit INTEGER DEFAULT 0,
     min_interval_sec  INTEGER DEFAULT 0,
-    timeout_sec       INTEGER DEFAULT 120,
+    timeout_sec       INTEGER DEFAULT 600,
     retry_times       INTEGER DEFAULT 3,
     status            INTEGER DEFAULT 1,
     balance           REAL DEFAULT 0,

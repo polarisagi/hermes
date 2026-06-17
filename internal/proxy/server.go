@@ -404,10 +404,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			targetURL = translate.BuildTargetURL(activeChan.Provider, targetEndpoint, targetPath)
 		}
 
-		// Apply channel-specific timeout (default 180s) to prevent infinite hangs
+		// Apply channel-specific timeout (default 600s) to prevent infinite hangs
 		timeoutSec := activeChan.Provider.TimeoutSec
 		if timeoutSec <= 0 {
-			timeoutSec = 180
+			timeoutSec = 600
 		}
 		
 		reqCtx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSec)*time.Second)

@@ -74,9 +74,9 @@ func (r *ProviderRepo) GetUserProviders(ctx context.Context) ([]domain.UserProvi
 }
 
 func (r *ProviderRepo) GetSysProvider(ctx context.Context, providerID string) (*domain.SysProvider, error) {
-	query := `SELECT provider_id, provider_name FROM sys_providers WHERE provider_id = ?`
+	query := `SELECT provider_id, provider_name, default_concurrency, default_timeout_sec FROM sys_providers WHERE provider_id = ?`
 	var p domain.SysProvider
-	err := DB().QueryRowContext(ctx, query, providerID).Scan(&p.ProviderID, &p.ProviderName)
+	err := DB().QueryRowContext(ctx, query, providerID).Scan(&p.ProviderID, &p.ProviderName, &p.DefaultConcurrency, &p.DefaultTimeoutSec)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (r *ProviderRepo) GetSysAccessEndpoint(ctx context.Context, endpointID stri
 }
 
 func (r *ProviderRepo) GetAllSysProviders(ctx context.Context) ([]domain.SysProvider, error) {
-	rows, err := DB().QueryContext(ctx, "SELECT provider_id, provider_name FROM sys_providers ORDER BY provider_name ASC")
+	rows, err := DB().QueryContext(ctx, "SELECT provider_id, provider_name, default_concurrency, default_timeout_sec FROM sys_providers ORDER BY provider_name ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (r *ProviderRepo) GetAllSysProviders(ctx context.Context) ([]domain.SysProv
 	var providers []domain.SysProvider
 	for rows.Next() {
 		var p domain.SysProvider
-		if err := rows.Scan(&p.ProviderID, &p.ProviderName); err != nil {
+		if err := rows.Scan(&p.ProviderID, &p.ProviderName, &p.DefaultConcurrency, &p.DefaultTimeoutSec); err != nil {
 			return nil, err
 		}
 		providers = append(providers, p)
