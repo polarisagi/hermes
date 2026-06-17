@@ -144,6 +144,7 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 	return nil
 }
 
+
 func rewriteBodyForGEAPClaude(bodyBytes []byte, isCountTokens bool, targetModel string) ([]byte, error) {
 	var m map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &m); err != nil {

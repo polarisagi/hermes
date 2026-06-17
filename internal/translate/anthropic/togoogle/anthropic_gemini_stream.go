@@ -308,6 +308,28 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		for _, partIntf := range parts {
 			part, _ := partIntf.(map[string]interface{})
 
+			// 诊断日志：记录每个 part 的类型，方便排查思考内容是否携带 thought=true 标记
+			if slog.Default().Enabled(nil, slog.LevelDebug) {
+				isThoughtField, _ := part["thought"].(bool)
+				_, hasFuncCall := part["functionCall"]
+				_, hasSig := part["thoughtSignature"]
+				textPreview := ""
+				if t, ok := part["text"].(string); ok && len(t) > 0 {
+					if len(t) > 60 {
+						textPreview = t[:60] + "..."
+					} else {
+						textPreview = t
+					}
+				}
+				slog.Debug("🧩 [Stream] Gemini part",
+					"trace_id", traceID,
+					"thought", isThoughtField,
+					"has_sig", hasSig,
+					"has_func_call", hasFuncCall,
+					"text_preview", textPreview,
+				)
+			}
+
 			// Gemini 在启用 thinkingConfig.includeThoughts 时，以 thought=true 的 part 返回推理过程。
 			// Gemini 流式可能把同一次思考分成多个 chunk 推送，全部合并到同一个 Anthropic thinking 块
 			// 以符合 Anthropic SSE 协议（一次完整思考对应一个 thinking block，内含多个 thinking_delta）。
@@ -376,6 +398,20 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 						},
 					})
 					// 不清空 thoughtSig，保留给后续的 functionCall 使用
+				} else {
+					// Gemini 未返回 thoughtSignature：使用官方 bypass 值通知下游跳过验证。
+					slog.Warn("⚠️ [Stream] thinking 块缺少 thoughtSignature，使用 bypass 值",
+						"trace_id", traceID,
+						"block_index", blockIndex,
+					)
+					writeSSE(w, flusher, "content_block_delta", StreamEvent{
+						Type:  "content_block_delta",
+						Index: ptrInt(blockIndex),
+						Delta: &Delta{
+							Type:      "signature_delta",
+							Signature: skipThoughtSigValidator,
+						},
+					})
 				}
 				writeSSEContentBlockStop(w, flusher, blockIndex)
 				inThinking = false
@@ -527,6 +563,12 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 					Index: ptrInt(blockIndex),
 					Delta: &Delta{Type: "signature_delta", Signature: thoughtSig},
 				})
+			} else {
+				writeSSE(w, flusher, "content_block_delta", StreamEvent{
+					Type:  "content_block_delta",
+					Index: ptrInt(blockIndex),
+					Delta: &Delta{Type: "signature_delta", Signature: skipThoughtSigValidator},
+				})
 			}
 			writeSSEContentBlockStop(w, flusher, blockIndex)
 		}
@@ -566,10 +608,25 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 					Signature: thoughtSig,
 				},
 			})
+		} else {
+			// 流结束时 thinking 块仍无签名：使用官方 bypass 值
+			slog.Warn("⚠️ [Stream] 流结束时 thinking 块缺少 thoughtSignature，使用 bypass 值",
+				"trace_id", traceID,
+				"block_index", blockIndex,
+			)
+			writeSSE(w, flusher, "content_block_delta", StreamEvent{
+				Type:  "content_block_delta",
+				Index: ptrInt(blockIndex),
+				Delta: &Delta{
+					Type:      "signature_delta",
+					Signature: skipThoughtSigValidator,
+				},
+			})
 		}
 		writeSSEContentBlockStop(w, flusher, blockIndex)
 		blockIndex++
 	}
+
 	if inText {
 		if isCompact {
 			compactManager.Flush(func(eventType string, data interface{}) {

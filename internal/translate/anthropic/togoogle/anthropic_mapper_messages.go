@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	gcommon "github.com/polarisagi/hermes/internal/translate/google"
 )
+
+// skipThoughtSigValidator 是 Google 官方提供的占位签名，用于跳过 Gemini 3 的 thoughtSignature 验证。
+// 适用场景：历史记录来自其他模型、签名丢失、或我们自己的兜底签名需要替换。
+// 参见：https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+const skipThoughtSigValidator = "skip_thought_signature_validator"
 
 // mapMessages 转换历史对话
 func mapMessages(messages []Message, model string) ([]map[string]interface{}, error) {
@@ -128,18 +131,15 @@ func parseToolUseBlock(m map[string]interface{}, model, lastSignature string, fl
 		thoughtSig = lastSignature
 	}
 
-	if thoughtSig == "" && gcommon.IsGemini3Model(model) {
-		argsBytes, _ := json.Marshal(m["input"])
-		textPart := fmt.Sprintf("<past_tool_execution name=\"%s\">\n%s\n</past_tool_execution>", m["name"], string(argsBytes))
-		if id, ok := m["id"].(string); ok {
-			flattenedTools[id] = true
-		}
-		return []map[string]interface{}{{"text": textPart}}
+	// 始终填写 thoughtSignature：
+	// - Gemini 3 在 functionCall part 上强制要求签名，缺失返回 400。
+	// - 有真实 Gemini 签名时直接使用；签名为空或为旧占位符时，改用官方 bypass 值
+	//   "skip_thought_signature_validator"，通知 Gemini 跳过验证（官方 FAQ 明确支持）。
+	// - 不再进行 XML 退化：退化会让 Gemini 把工具历史当普通文本，破坏后续 functionCall。
+	if thoughtSig == "" || thoughtSig == "fallback-no-sig" {
+		thoughtSig = skipThoughtSigValidator
 	}
-
-	if thoughtSig != "" {
-		partObj["thoughtSignature"] = thoughtSig
-	}
+	partObj["thoughtSignature"] = thoughtSig
 
 	return []map[string]interface{}{partObj}
 }
