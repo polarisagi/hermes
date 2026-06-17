@@ -616,7 +616,7 @@ func (m *Manager) selectBestWithWait(ctx context.Context, clientID string, filte
 		"client", clientID,
 		"client_queue_pos", clientQueueLen,
 		"total_waiting", totalWaiting,
-		"max_wait", maxWait,
+		"max_wait", maxWait.Truncate(time.Second).String(),
 	)
 
 	select {
@@ -624,7 +624,7 @@ func (m *Manager) selectBestWithWait(ctx context.Context, clientID string, filte
 		slog.Info("客户端已断开，取消公平排队等待", "client", clientID, "reason", ctx.Err())
 		return nil, "", ctx.Err()
 	case <-time.After(maxWait):
-		slog.Warn("公平排队等待超时", "client", clientID, "max_wait", maxWait)
+		slog.Warn("公平排队等待超时", "client", clientID, "max_wait", maxWait.Truncate(time.Second).String())
 		return nil, "", ErrAllChannelsBusy
 	case result := <-waiter.resultCh:
 		return result.ch, result.model, result.err
