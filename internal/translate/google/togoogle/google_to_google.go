@@ -67,7 +67,7 @@ func (t *GoogleToGoogleTranslator) TranslateResponse(w http.ResponseWriter, r *h
 		strings.Contains(r.URL.Path, "stream") ||
 		strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 	if isStream {
-		translate.ForwardStreamBody(w, resp.Body)
+		translate.ForwardStreamBody(r.Context(), w, resp.Body)
 	} else {
 		_, _ = io.Copy(w, resp.Body)
 	}

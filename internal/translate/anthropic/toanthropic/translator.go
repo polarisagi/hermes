@@ -43,7 +43,7 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 	
 	stream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 	if stream {
-		translate.ForwardStreamBody(w, resp.Body)
+		translate.ForwardStreamBody(r.Context(), w, resp.Body)
 	} else {
 		_, _ = io.Copy(w, resp.Body)
 	}

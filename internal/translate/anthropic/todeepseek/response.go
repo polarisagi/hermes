@@ -68,6 +68,9 @@ func handleDeepSeekStream(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	for {
+		if r.Context().Err() != nil {
+			break
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break

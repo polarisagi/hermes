@@ -195,6 +195,9 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 	toolCalls := make(map[int]*toolCallAcc)
 
 	for {
+		if r.Context().Err() != nil {
+			break
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break

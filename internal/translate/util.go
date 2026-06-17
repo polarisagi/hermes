@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,12 +58,15 @@ func BuildTargetURL(provider *domain.UserProvider, targetEndpoint *domain.SysAcc
 }
 
 // ForwardStreamBody 将 body 流式转发到 w，维护尾部 8KB 缓冲窗口
-func ForwardStreamBody(w http.ResponseWriter, body io.Reader) (tailBuf []byte, totalWritten int64) {
+func ForwardStreamBody(ctx context.Context, w http.ResponseWriter, body io.Reader) (tailBuf []byte, totalWritten int64) {
 	flusher, _ := w.(http.Flusher)
 	buf := make([]byte, 8192)
 	const tailWindowSize = 8192
 
 	for {
+		if ctx.Err() != nil {
+			break
+		}
 		n, readErr := body.Read(buf)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {

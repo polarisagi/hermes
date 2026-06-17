@@ -98,7 +98,7 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response) {
 	_ = json.NewEncoder(w).Encode(gResp)
 }
 
-func handleStream(w http.ResponseWriter, resp *http.Response) {
+func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -119,6 +119,9 @@ func handleStream(w http.ResponseWriter, resp *http.Response) {
 	finishReason := ""
 
 	for {
+		if r.Context().Err() != nil {
+			break
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break

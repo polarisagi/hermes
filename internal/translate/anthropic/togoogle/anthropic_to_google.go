@@ -112,7 +112,7 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 
 	if isGEAPClaude {
 		if stream {
-			streamGEAPClaude(w, resp, model)
+			streamGEAPClaude(w, r, resp, model)
 		} else {
 			nonStreamGEAPClaude(w, resp)
 		}
@@ -163,10 +163,10 @@ func rewriteBodyForGEAPClaude(bodyBytes []byte, isCountTokens bool, targetModel 
 	return json.Marshal(m)
 }
 
-func streamGEAPClaude(w http.ResponseWriter, upstreamResp *http.Response, modelName string) {
+func streamGEAPClaude(w http.ResponseWriter, r *http.Request, upstreamResp *http.Response, modelName string) {
 	translate.CopyHeaders(w.Header(), upstreamResp.Header)
 	w.WriteHeader(upstreamResp.StatusCode)
-	translate.ForwardStreamBody(w, upstreamResp.Body)
+	translate.ForwardStreamBody(r.Context(), w, upstreamResp.Body)
 }
 
 func nonStreamGEAPClaude(w http.ResponseWriter, upstreamResp *http.Response) {

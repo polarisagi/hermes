@@ -444,6 +444,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 4. 发送请求
 		resp, err := httpclient.Client.Do(proxyReq)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || r.Context().Err() != nil {
+				slog.Warn("请求被取消或超时", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
+				s.chanManager.ReleaseChannel(activeChan)
+				return
+			}
 			slog.Warn("上游请求网络错误，准备重试", "attempt", attempt, "error", err, "provider", activeChan.Provider.ProviderID)
 			s.chanManager.ReportError(activeChan, 502)
 			s.chanManager.ReleaseChannel(activeChan)

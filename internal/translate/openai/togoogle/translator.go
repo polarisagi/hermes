@@ -89,7 +89,7 @@ func (t *OpenAIToGoogleTranslator) TranslateResponse(w http.ResponseWriter, r *h
 	targetModel := extractModelFromPath(resp.Request.URL.Path)
 
 	if isStream {
-		handleStream(w, resp, targetModel)
+		handleStream(w, r, resp, targetModel)
 	} else {
 		handleNonStream(w, resp, targetModel)
 	}

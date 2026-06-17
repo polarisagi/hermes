@@ -80,7 +80,7 @@ func (t *OpenAITranslator) TranslateResponse(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(resp.StatusCode)
 
 	if stream {
-		translate.ForwardStreamBody(w, resp.Body)
+		translate.ForwardStreamBody(r.Context(), w, resp.Body)
 	} else {
 		_, _ = io.Copy(w, resp.Body)
 	}

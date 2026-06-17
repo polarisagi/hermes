@@ -61,7 +61,7 @@ func (t *OpenAIToAnthropicTranslator) TranslateResponse(w http.ResponseWriter, r
 	// 始终输出 Chat Completions 格式；Responses API 的包装由 proxy.Server 统一处理
 	// 实际模型名在 handleStream/handleNonStream 内从 Anthropic 响应中提取
 	if strings.Contains(resp.Header.Get("Content-Type"), "event-stream") {
-		handleStream(w, resp, "")
+		handleStream(w, r, resp, "")
 	} else {
 		handleNonStream(w, resp, "")
 	}
