@@ -189,9 +189,6 @@ export default {
                     
                     const origCreds = node.auth_credentials || {};
 
-                    const p = this.sysProviders.find(sp => sp.provider_id === node.provider_id);
-                    const defaultTimeout = p ? p.default_timeout_sec : 600;
-
                     this.nodeForm = {
                         ...node,
                         
@@ -199,7 +196,7 @@ export default {
                         project_id: origCreds.project_id || '',
                         location: origCreds.region || 'global',
                         limit_percent: node.limit_percent !== undefined ? node.limit_percent : 90.0,
-                        timeout_sec: (node.timeout_sec && node.timeout_sec > 0) ? node.timeout_sec : defaultTimeout,
+                        timeout_sec: node.timeout_sec !== undefined ? node.timeout_sec : 600,
                         valid_from: this.toDatetimeLocal(node.valid_from),
                         valid_to: this.toDatetimeLocal(node.valid_to),
                     };
@@ -211,23 +208,7 @@ export default {
                         priority: 10, limit_percent: 90.0, balance: 0.0, min_request_interval_sec: 0, concurrency: 0, timeout_sec: 600,
                         valid_from: `${today}T00:00:00`, valid_to: `2099-12-31T23:59:59`, status: 1
                     };
-                    // Apply provider defaults for new node
-                    const p = this.sysProviders.find(sp => sp.provider_id === this.nodeForm.provider);
-                    if (p) {
-                        this.nodeForm.timeout_sec = p.default_timeout_sec || 600;
-                        this.nodeForm.concurrency = p.default_concurrency || 0;
-                    }
                     this.nodeModal = { show: true, isEdit: false };
-                }
-            },
-
-            onProviderChange() {
-                if (!this.nodeModal.isEdit) {
-                    const p = this.sysProviders.find(sp => sp.provider_id === this.nodeForm.provider);
-                    if (p) {
-                        this.nodeForm.timeout_sec = p.default_timeout_sec || 600;
-                        this.nodeForm.concurrency = p.default_concurrency || 0;
-                    }
                 }
             },
 
@@ -554,7 +535,7 @@ export default {
 
                                 <label class="form-control w-full">
                                     <div class="label"><span class="label-text font-medium">大模型厂商 <span class="text-error">*</span></span></div>
-                                    <select name="nodeForm_provider" x-model="nodeForm.provider" @change="onProviderChange()" class="select select-bordered select-sm w-full">
+                                    <select name="nodeForm_provider" x-model="nodeForm.provider" class="select select-bordered select-sm w-full">
                                         <template x-for="p in sysProviders" :key="p.provider_id">
                                             <option :value="p.provider_id" x-text="p.provider_name"></option>
                                         </template>
