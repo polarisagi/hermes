@@ -166,13 +166,13 @@ func (p *Pipeline) Reload(ctx context.Context) error {
 }
 
 // RouteRequest 核心路由入口：返回最终调用的后台通道和真实模型名
-func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*pool.ActiveChannel, string, error) {
+func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID, clientID string) (*pool.ActiveChannel, string, error) {
 	slog.Debug("启动 4 级智能路由管线", "requested_model", requestedModelID)
 
 	executeCustomRoutes := func(targets []TargetPlatformRoute, src string) (*pool.ActiveChannel, string, error) {
 		var lastRouteErr error
 		for _, target := range targets {
-			ch, actualModel, err := p.chanManager.SelectBestChannelByProviderAndModel(target.ProviderID, target.ModelID)
+			ch, actualModel, err := p.chanManager.SelectBestChannelByProviderAndModel(ctx, clientID, target.ProviderID, target.ModelID)
 			if err == nil {
 				p.routingLogRepo.SaveAsync(&domain.RoutingLog{
 					RequestedModel: requestedModelID,
@@ -239,7 +239,7 @@ func (p *Pipeline) RouteRequest(ctx context.Context, requestedModelID string) (*
 	var lastErr error
 
 	for idx, t := range tiersToTry {
-		ch, actualModel, err := p.chanManager.SelectBestChannelByTier(t, requestedModelID)
+		ch, actualModel, err := p.chanManager.SelectBestChannelByTier(ctx, clientID, t, requestedModelID)
 		if err != nil {
 			slog.Debug("当前 tier 无可用节点，尝试下一级", "tier", t, "error", err)
 			if errors.Is(err, pool.ErrAllChannelsBusy) {

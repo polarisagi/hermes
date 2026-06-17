@@ -290,7 +290,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		activeChan, actualModel, err := s.pipeline.RouteRequest(r.Context(), modelName)
+		activeChan, actualModel, err := s.pipeline.RouteRequest(r.Context(), modelName, clientName)
 		finalActualModel = actualModel
 		if activeChan != nil && activeChan.Provider != nil {
 			finalProviderName = activeChan.Provider.ProviderID
@@ -298,13 +298,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			finalProviderID = activeChan.Provider.ID
 		}
 		if err != nil {
-			if errors.Is(err, pool.ErrAllChannelsBusy) && attempt < maxRetries {
-				slog.Warn("所有可用渠道均繁忙，等待重试", "attempt", attempt, "model", modelName)
-				time.Sleep(3 * time.Second) // 优化：提升至 3 秒，为 LLM 的长流并发释放争取更大时间窗口
-				lastErr = err
-				continue
-			}
 			skipBilling = true
+			// ErrAllChannelsBusy：Manager 层已内置排队等待（最长 10 分钟），
+			// 返回此错误说明已等待超时，无需在此层再次重试。
 			if errors.Is(err, pool.ErrAllChannelsBusy) {
 				slog.Error("路由匹配失败 (所有可用渠道均繁忙/熔断/额度耗尽)", "requested_model", modelName, "error", err)
 				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "rate_limit_error",

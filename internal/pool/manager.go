@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/polarisagi/hermes/internal/domain"
@@ -27,6 +28,10 @@ const (
 	StatusProbation = 3
 	StatusExhausted = 4
 )
+
+// DefaultWaitTimeout 请求在排队等待时的最长等待时间（超过后返回 ErrAllChannelsBusy）
+// 设置为 5 分钟：符合 AI 编码工具实际超时范围，超过 5min 排队说明真正过载
+const DefaultWaitTimeout = 5 * time.Minute
 
 // ActiveChannel 内存中一个活跃的用户渠道实例
 type ActiveChannel struct {
@@ -48,24 +53,56 @@ type SysModelCacheInfo struct {
 	VersionWeight int
 }
 
+// waitResult 调度器分配给等待请求的结果
+type waitResult struct {
+	ch    *ActiveChannel
+	model string
+	err   error
+}
+
+// waitRequest 代表一个正在公平队列中等待的客户端请求
+type waitRequest struct {
+	ctx        context.Context
+	filter     func(*ActiveChannel) (string, SysModelCacheInfo, int, bool)
+	resultCh   chan waitResult // 缓冲为 1
+	enqueuedAt time.Time
+}
+
+// clientQueue 单个客户端的 FIFO 请求列表
+type clientQueue struct {
+	clientID       string
+	requests       []*waitRequest
+	firstArrivedAt time.Time
+}
+
 // Manager 维护所有健康渠道的内存状态，执行并发控制与负载均衡
 type Manager struct {
 	providerRepo *store.ProviderRepo
 	modelRepo    *store.ModelRepo
 
-	mu        sync.RWMutex
-	channels  map[int]*ActiveChannel
-	sysModels map[string]map[string]SysModelCacheInfo // ModelID → ProviderID → SysModelCacheInfo
+	mu           sync.RWMutex
+	channels     map[int]*ActiveChannel
+	sysModels    map[string]map[string]SysModelCacheInfo // ModelID → ProviderID → SysModelCacheInfo
+	waitingCount int64                                   // 当前正在排队等待渠道的请求数（原子操作）
+
+	// 公平调度队列：per-client round-robin
+	queueMu        sync.Mutex
+	clientQueues   map[string]*clientQueue // clientID → per-client FIFO 队列
+	clientOrder    []string                // 按首次到达顺序排列，用于 round-robin
+	dispatchNotify chan struct{}            // 有缓冲(1)，渠道释放/冷却结束时触发调度器
 }
 
 func NewManager(providerRepo *store.ProviderRepo, modelRepo *store.ModelRepo) *Manager {
 	m := &Manager{
-		providerRepo: providerRepo,
-		modelRepo:    modelRepo,
-		channels:     make(map[int]*ActiveChannel),
-		sysModels:    make(map[string]map[string]SysModelCacheInfo),
+		providerRepo:   providerRepo,
+		modelRepo:      modelRepo,
+		channels:       make(map[int]*ActiveChannel),
+		sysModels:      make(map[string]map[string]SysModelCacheInfo),
+		clientQueues:   make(map[string]*clientQueue),
+		dispatchNotify: make(chan struct{}, 1),
 	}
 	go m.cooldownManager()
+	go m.dispatcherLoop()
 	return m
 }
 
@@ -243,12 +280,14 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 		lastAcquireTime time.Time
 	}
 	var candidates []candidate
+	matchedCount := 0 // 匹配到 filter 的渠道总数（不论是否可用），用于区分"无匹配"和"全繁忙"
 
 	for _, ch := range m.channels {
 		targetModel, info, affinity, matched := filter(ch)
 		if !matched {
 			continue
 		}
+		matchedCount++
 
 		ch.mu.Lock()
 		avail := ch.Status == StatusIdle || ch.Status == StatusProbation
@@ -273,6 +312,11 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 	}
 
 	if len(candidates) == 0 {
+		if matchedCount == 0 {
+			// 没有任何渠道能匹配此请求（模型未配置/厂商不存在）→ 快速报错，不需等待
+			return nil, "", ErrChannelNotFound
+		}
+		// 渠道存在但全部繁忙/冷却/Exhausted
 		return nil, "", ErrAllChannelsBusy
 	}
 
@@ -337,9 +381,254 @@ func (m *Manager) selectBest(filter func(*ActiveChannel) (string, SysModelCacheI
 	return nil, "", ErrAllChannelsBusy
 }
 
-// SelectBestChannelByTier 极简模式负载均衡：按能力梯队选最优渠道
-func (m *Manager) SelectBestChannelByTier(tier string, requestedModelID string) (*ActiveChannel, string, error) {
-	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
+// computeNextAvailableTime 扫描所有匹配渠道，计算最近某个渠道何时可用（基于 MinIntervalSec / Cooldown）
+// 返回零值表示没有匹配的渠道（或全部 Exhausted）
+func (m *Manager) computeNextAvailableTime(filter func(*ActiveChannel) (string, SysModelCacheInfo, int, bool)) time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now()
+	var earliest time.Time
+
+	for _, ch := range m.channels {
+		_, _, _, matched := filter(ch)
+		if !matched {
+			continue
+		}
+
+		ch.mu.Lock()
+		status := ch.Status
+		lastAcq := ch.LastAcquireTime
+		coolUntil := ch.CooldownUntil
+		minInterval := ch.Provider.MinIntervalSec
+		ch.mu.Unlock()
+
+		if status == StatusExhausted {
+			continue
+		}
+
+		var candidate time.Time
+		if status == StatusCooldown && coolUntil.After(now) {
+			// Cooldown 结束即可变为 Probation，尝试调度
+			candidate = coolUntil
+		} else if minInterval > 0 && !lastAcq.IsZero() {
+			next := lastAcq.Add(time.Duration(minInterval) * time.Second)
+			if next.After(now) {
+				candidate = next
+			} else {
+				// 间隔已经过了，但可能被并发数占满，1 秒后轮询
+				candidate = now.Add(1 * time.Second)
+			}
+		} else {
+			// 并发数限制：任意时刻都可能释放，1 秒后轮询
+			candidate = now.Add(1 * time.Second)
+		}
+
+		if earliest.IsZero() || candidate.Before(earliest) {
+			earliest = candidate
+		}
+	}
+
+	return earliest
+}
+
+// drainCancelledHead 从客户端队列头部清除已取消的请求
+func drainCancelledHead(requests []*waitRequest) []*waitRequest {
+	for len(requests) > 0 {
+		select {
+		case <-requests[0].ctx.Done():
+			requests = requests[1:]
+		default:
+			return requests
+		}
+	}
+	return requests
+}
+
+// notifyDispatcher 通知调度器有渠道变化（非阻塞，已有待处理通知时跳过）
+func (m *Manager) notifyDispatcher() {
+	select {
+	case m.dispatchNotify <- struct{}{}:
+	default:
+	}
+}
+
+// tryDispatch Multi-Client Round-Robin 公平调度：
+// 每轮从每个客户的队列各取一个请求尝试分配，差差轮流直到所有人都无法分配为止
+// 客户端内部保持 FIFO，客户端间保持公平
+func (m *Manager) tryDispatch() {
+	m.queueMu.Lock()
+	defer m.queueMu.Unlock()
+
+	for {
+		anyServed := false
+
+		// 一轮遍历所有客户端，每个客户端最多服务一个请求（round-robin）
+		for _, clientID := range m.clientOrder {
+			cq := m.clientQueues[clientID]
+			if cq == nil {
+				continue
+			}
+
+			// 惰性清除队列头部已取消的请求
+			cq.requests = drainCancelledHead(cq.requests)
+			if len(cq.requests) == 0 {
+				continue
+			}
+
+			head := cq.requests[0]
+			ch, model, err := m.selectBest(head.filter)
+			if errors.Is(err, ErrAllChannelsBusy) {
+				// 这个客户端用的渠道此刻全部繁忙，跳过，继续服务下个客户端
+				continue
+			}
+
+			// 服务成功（或永久错误）：移出队列并通知请求方
+			cq.requests = cq.requests[1:]
+			head.resultCh <- waitResult{ch: ch, model: model, err: err}
+			anyServed = true
+			slog.Info("公平调度：成功为客户端分配渠道",
+				"client", clientID,
+				"wait_duration", time.Since(head.enqueuedAt).Truncate(time.Millisecond),
+			)
+		}
+
+		if !anyServed {
+			// 所有客户端要么没有请求，要么全部渠道繁忙，当轮结束
+			break
+		}
+		// 当轮服务了请求，开始下一轮（可能有更多渠道可用）
+	}
+
+	// 清理空队列的客户端，保持 clientOrder 干净
+	cleanOrder := make([]string, 0, len(m.clientOrder))
+	for _, clientID := range m.clientOrder {
+		cq := m.clientQueues[clientID]
+		if cq != nil {
+			cq.requests = drainCancelledHead(cq.requests)
+		}
+		if cq == nil || len(cq.requests) == 0 {
+			delete(m.clientQueues, clientID)
+		} else {
+			cleanOrder = append(cleanOrder, clientID)
+		}
+	}
+	m.clientOrder = cleanOrder
+}
+
+// dispatcherLoop 中央调度 goroutine：监听通知并精确定时，驱动公平 round-robin 队列
+func (m *Manager) dispatcherLoop() {
+	for {
+		// 根据队列中任意客户端的过滤器计算最优睡眠时长
+		m.queueMu.Lock()
+		var anyFilter func(*ActiveChannel) (string, SysModelCacheInfo, int, bool)
+		for _, clientID := range m.clientOrder {
+			cq := m.clientQueues[clientID]
+			if cq != nil && len(cq.requests) > 0 {
+				anyFilter = cq.requests[0].filter
+				break
+			}
+		}
+		m.queueMu.Unlock()
+
+		var sleepDur time.Duration
+		if anyFilter != nil {
+			// 有排队请求：精确等到最近渠道可用
+			next := m.computeNextAvailableTime(anyFilter)
+			if next.IsZero() || !next.After(time.Now()) {
+				sleepDur = 1 * time.Second
+			} else {
+				sleepDur = time.Until(next)
+				if sleepDur < 50*time.Millisecond {
+					sleepDur = 50 * time.Millisecond
+				}
+			}
+		} else {
+			// 队列为空：等待通知即可（最长等 1 小时防止意外卡死）
+			sleepDur = 1 * time.Hour
+		}
+
+		select {
+		case <-m.dispatchNotify:
+		case <-time.After(sleepDur):
+		}
+
+		m.tryDispatch()
+	}
+}
+
+// selectBestWithWait 公平 FIFO 入口：先快速尝试，失败后按 clientID 加入 per-client 公平队列，
+// 由 dispatcherLoop 进行 round-robin 公平分配，最长等待 maxWait
+// 若模型未配置（ErrChannelNotFound），立即报错不进队列
+func (m *Manager) selectBestWithWait(ctx context.Context, clientID string, filter func(*ActiveChannel) (string, SysModelCacheInfo, int, bool), maxWait time.Duration) (*ActiveChannel, string, error) {
+	if clientID == "" {
+		clientID = "unknown"
+	}
+	// 第一次快速尝试（无需入队）
+	ch, model, err := m.selectBest(filter)
+	if err == nil {
+		return ch, model, nil
+	}
+	// 模型/厂商未配置 → 无需等待，立即报错
+	if errors.Is(err, ErrChannelNotFound) {
+		slog.Warn("请求模型无任何匹配渠道（未配置），快速报错不进队列", "client", clientID)
+		return nil, "", err
+	}
+	if !errors.Is(err, ErrAllChannelsBusy) {
+		return nil, "", err
+	}
+
+	// 所有渠道繁忙 → 加入 per-client 公平队列
+	waiter := &waitRequest{
+		ctx:        ctx,
+		filter:     filter,
+		resultCh:   make(chan waitResult, 1),
+		enqueuedAt: time.Now(),
+	}
+
+	m.queueMu.Lock()
+	cq := m.clientQueues[clientID]
+	if cq == nil {
+		cq = &clientQueue{
+			clientID:       clientID,
+			firstArrivedAt: time.Now(),
+		}
+		m.clientQueues[clientID] = cq
+		m.clientOrder = append(m.clientOrder, clientID)
+	}
+	cq.requests = append(cq.requests, waiter)
+	clientQueueLen := len(cq.requests)
+	totalWaiting := 0
+	for _, c := range m.clientQueues {
+		totalWaiting += len(c.requests)
+	}
+	m.queueMu.Unlock()
+
+	atomic.AddInt64(&m.waitingCount, 1)
+	defer atomic.AddInt64(&m.waitingCount, -1)
+
+	slog.Info("请求进入公平排队队列",
+		"client", clientID,
+		"client_queue_pos", clientQueueLen,
+		"total_waiting", totalWaiting,
+		"max_wait", maxWait,
+	)
+
+	select {
+	case <-ctx.Done():
+		slog.Info("客户端已断开，取消公平排队等待", "client", clientID, "reason", ctx.Err())
+		return nil, "", ctx.Err()
+	case <-time.After(maxWait):
+		slog.Warn("公平排队等待超时", "client", clientID, "max_wait", maxWait)
+		return nil, "", ErrAllChannelsBusy
+	case result := <-waiter.resultCh:
+		return result.ch, result.model, result.err
+	}
+}
+
+// SelectBestChannelByTier 极简模式负载均衡：按能力梯队选最优渠道（公平排队）
+func (m *Manager) SelectBestChannelByTier(ctx context.Context, clientID, tier, requestedModelID string) (*ActiveChannel, string, error) {
+	filter := func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
 		var bestMod *domain.UserModel
 		for i := range ch.Models {
 			mod := &ch.Models[i]
@@ -357,7 +646,6 @@ func (m *Manager) SelectBestChannelByTier(tier string, requestedModelID string) 
 		}
 		if bestMod != nil {
 			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
-			
 			affinity := 0
 			lowerActual := strings.ToLower(info.ActualModelID)
 			lowerReq := strings.ToLower(requestedModelID)
@@ -366,24 +654,23 @@ func (m *Manager) SelectBestChannelByTier(tier string, requestedModelID string) 
 			} else if strings.Contains(lowerActual, lowerReq) || strings.Contains(lowerReq, lowerActual) {
 				affinity = 1
 			}
-
 			return info.ActualModelID, info, affinity, true
 		}
 		return "", SysModelCacheInfo{}, 0, false
-	})
+	}
+	return m.selectBestWithWait(ctx, clientID, filter, DefaultWaitTimeout)
 }
 
-// SelectBestChannelByProviderAndModel 专业模式负载均衡：在指定厂商和模型内选最优渠道
-func (m *Manager) SelectBestChannelByProviderAndModel(providerID, modelID string) (*ActiveChannel, string, error) {
+// SelectBestChannelByProviderAndModel 专业模式负载均衡：在指定厂商和模型内选最优渠道（公平排队）
+func (m *Manager) SelectBestChannelByProviderAndModel(ctx context.Context, clientID, providerID, modelID string) (*ActiveChannel, string, error) {
 	if providerID == "" || modelID == "" {
 		return nil, "", ErrChannelNotFound
 	}
 
-	return m.selectBest(func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
+	filter := func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
 		if ch.Provider.ProviderID != providerID {
 			return "", SysModelCacheInfo{}, 0, false
 		}
-
 		var bestMod *domain.UserModel
 		for i := range ch.Models {
 			mod := &ch.Models[i]
@@ -404,22 +691,25 @@ func (m *Manager) SelectBestChannelByProviderAndModel(providerID, modelID string
 			return info.ActualModelID, info, 2, true
 		}
 		return "", SysModelCacheInfo{}, 0, false
-	})
+	}
+	return m.selectBestWithWait(ctx, clientID, filter, DefaultWaitTimeout)
 }
 
-// ReleaseChannel 归还并发连接
+// ReleaseChannel 归还并发连接，并通知 FIFO 调度器有渠道释放
 func (m *Manager) ReleaseChannel(ch *ActiveChannel) {
 	if ch == nil {
 		return
 	}
 	ch.mu.Lock()
-	defer ch.mu.Unlock()
 	if ch.ConcurrentConnections > 0 {
 		ch.ConcurrentConnections--
 	}
 	if ch.Status == StatusBusy {
 		ch.Status = StatusIdle
 	}
+	ch.mu.Unlock()
+	// 通知调度器：有渠道释放，可以服务等待队列中的下一个请求
+	m.notifyDispatcher()
 }
 
 // ReportSuccess 请求成功，Probation 状态恢复为 Idle
@@ -463,11 +753,12 @@ func (m *Manager) ReportError(ch *ActiveChannel, statusCode int) {
 	}
 }
 
-// cooldownManager 守护协程，定期将 Cooldown 渠道恢复到 Probation
+// cooldownManager 守护协程，定期将 Cooldown 渠道恢复到 Probation，并通知调度器
 func (m *Manager) cooldownManager() {
 	for {
 		time.Sleep(1 * time.Second)
 		now := time.Now()
+		notified := false
 		m.mu.RLock()
 		for _, ch := range m.channels {
 			ch.mu.Lock()
@@ -475,10 +766,15 @@ func (m *Manager) cooldownManager() {
 				ch.Status = StatusProbation
 				ch.LastAcquireTime = now
 				slog.Info("渠道冷却结束，进入 Probation", "channel", ch.Provider.Name)
+				notified = true
 			}
 			ch.mu.Unlock()
 		}
 		m.mu.RUnlock()
+		// 有渠道从 Cooldown 恢复时，通知 FIFO 调度器尝试服务等待队列
+		if notified {
+			m.notifyDispatcher()
+		}
 	}
 }
 
@@ -497,8 +793,9 @@ func (m *Manager) GetStats() (active, waiting, max int) {
 		}
 		ch.mu.Unlock()
 	}
-	// 目前没有明确的排队等待队列机制，返回0
-	return active, 0, max
+	// 返回真实的排队等待请求数（原子计数器）
+	waiting = int(atomic.LoadInt64(&m.waitingCount))
+	return active, waiting, max
 }
 
 // AddUsage updates the provider's used amount in memory, checks the limit, and triggers an async DB update.
