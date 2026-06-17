@@ -91,7 +91,7 @@ export default {
             async fetchData() {
                 if (Alpine.store('global').currentTab !== 'usage_billing') return;
                 try {
-                    const res = await fetch(`/api/admin/usage_billing/stats?start=${Alpine.store('global').startDate}&end=${Alpine.store('global').endDate}`);
+                    const res = await fetch(`/api/admin/usage_billing/stats?start=${Alpine.store('global').startDate}&end=${Alpine.store('global').endDate}&_t=${Date.now()}`);
                     const json = await res.json();
                     Alpine.store('global').apiData = json.details || [];
                     const accSet = new Set(Alpine.store('global').apiData.map(d => d.account));
