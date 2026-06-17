@@ -283,7 +283,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, k
 			if !inThinking {
 				writeEv("content_block_start", map[string]interface{}{
 					"type": "content_block_start", "index": blockIndex,
-					"content_block": map[string]interface{}{"type": "thinking", "thinking": ""},
+					"content_block": map[string]interface{}{"type": "thinking", "thinking": "", "signature": ""},
 				})
 				inThinking = true
 			}

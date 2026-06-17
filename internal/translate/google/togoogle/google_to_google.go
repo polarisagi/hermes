@@ -47,8 +47,16 @@ func (t *GoogleToGoogleTranslator) TranslateRequest(
 		subPath = replaceModelInPath(subPath, targetModel)
 	}
 
-	// 携带 alt=sse 查询参数（流式请求）
-	if strings.Contains(r.URL.RawQuery, "alt=sse") && !strings.Contains(subPath, "alt=sse") {
+
+	// 保留所有查询参数（透传客户端的 key, alt, serverSentEvents 等）
+	if r.URL.RawQuery != "" {
+		if strings.Contains(subPath, "?") {
+			subPath += "&" + r.URL.RawQuery
+		} else {
+			subPath += "?" + r.URL.RawQuery
+		}
+	} else if strings.Contains(r.URL.Path, "stream") && !strings.Contains(subPath, "alt=sse") {
+		// 容错：如果路径是 stream 且没有查询参数，补充 alt=sse
 		if strings.Contains(subPath, "?") {
 			subPath += "&alt=sse"
 		} else {

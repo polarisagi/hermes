@@ -143,7 +143,7 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 	// 旧格式（已废弃）：type="enabled" + budget_tokens
 	// 禁用：type="disabled"
 	// Gemini 2.5：thinkingBudget（整数 token 数）
-	// Gemini 3.x：thinkingLevel（MINIMAL/LOW/MEDIUM/HIGH），两者不可同时使用（API 会返回 400）
+	// Gemini 3.x：thinkingLevel（LOW/MEDIUM/HIGH），两者不可同时使用（API 会返回 400）
 	// includeThoughts:true 让 Gemini 在响应中返回 thought 标记的 parts，
 	// 流式/非流式处理器会将其转换为 Anthropic thinking 内容块 + signature_delta
 	thinkingEnabled := req.Thinking != nil &&
@@ -171,14 +171,14 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 		}
 	case thinkingExplicitlyDisabled:
 		// 客户端明确禁用思考
-		// Gemini 3.x 默认开启 HIGH 思考，需显式设为 MINIMAL 以尊重客户端意图
+		// Gemini 3.x 默认开启 HIGH 思考，需显式设为 LOW（最低档）以尽可能尊重客户端意图
 		// 注意：若请求含 tools，下方的工具兜底逻辑会覆盖此设置（Gemini 需要思考才能正确使用工具）
 		// Gemini 2.5 不可靠地支持 thinkingBudget=0 禁用，不设置让其自决
 		// 工具兜底逻辑同样会接管（见下方）
 		if gcommon.IsGemini3Model(model) {
 			genConfig["thinkingConfig"] = map[string]interface{}{
 				"includeThoughts": false,
-				"thinkingLevel":   "MINIMAL",
+				"thinkingLevel":   "LOW",
 			}
 		}
 	default:

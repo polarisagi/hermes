@@ -52,6 +52,8 @@ func adaptForDeepSeek(req *anthr.MessageRequest) {
 		default:
 			req.Thinking = nil
 		}
+	} else if req.Effort != "" {
+		req.Thinking = &anthr.ThinkingConfig{Type: "enabled"}
 	}
 
 	if req.Effort != "" {
