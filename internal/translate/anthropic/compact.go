@@ -394,6 +394,17 @@ func FlattenSystemPrompt(sys interface{}) string {
 	return ""
 }
 
+// GenerateFallbackCompactContent 当上游模型未生成任何文本内容时，生成一个基础的降级 compaction 块。
+//
+// 返回的 <summary> 告知 Claude Code 此次 compaction 未获得有效摘要，
+// 客户端应减小请求规模后重试，或等待片刻让上游恢复。
+func GenerateFallbackCompactContent(stopReason string) string {
+	if stopReason == "max_tokens" {
+		return "<analysis>\nThe model exhausted its output token budget (max_tokens) before producing any content. This indicates the thinking phase consumed the entire output allocation.\n</analysis>\n<summary>\nCompaction summary unavailable — the model output was truncated at max_tokens. Retry with a higher max_tokens value or reduce input context size.\n</summary>"
+	}
+	return "<analysis>\nThe upstream model did not produce any text content. This may be caused by a transient backend issue or the model choosing to respond with only internal reasoning.\n</analysis>\n<summary>\nCompaction summary unavailable — the model returned an empty response. Please try again or use /compact with a smaller conversation size.\n</summary>"
+}
+
 // BuildCompactPrompt 将复杂的 /compact 请求（含工具调用、思考块、历史等）压缩为单一纯文本 Prompt。
 //
 // 通过将所有消息历史序列化为 XML 结构后，以单条 user 消息发给目标模型（Google/OpenAI/DeepSeek），

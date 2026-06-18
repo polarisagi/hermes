@@ -296,11 +296,21 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 	}
 
 	if !hasRealContent {
-		if stopReason == "max_tokens" {
-			// MAX_TOKENS + 无内容：thinking 消耗了全部 maxOutputTokens，正文为空。
-			// 返回合法的 max_tokens 响应而非 overloaded_error——
-			// 重试无法改变 token 上限，触发重试只会浪费配额。
-			// 客户端收到 stop_reason=max_tokens 后可选择扩大 max_tokens 再试。
+		if isCompact {
+			// /compact 模式无内容：上游未返回文本（如 thinking 耗尽 token 预算或纯 thought 响应）。
+			// 返回降级 compaction 块而非 overloaded_error，让 Claude Code 收到有效内容
+			// 而非触发客户端重试风暴。降级块告知客户端缩小上下文后重试。
+			fallbackContent := anthr.GenerateFallbackCompactContent(stopReason)
+			slog.Warn("⚠️ [NonStream] /compact 无文本内容，返回降级 compaction 块",
+				"trace_id", traceID,
+				"stop_reason", stopReason,
+				"prompt_tokens", promptTokens)
+			contents = append(contents, Content{
+				Type:    "compaction",
+				Content: fallbackContent,
+			})
+			stopReason = "end_turn"
+		} else if stopReason == "max_tokens" {
 			slog.Warn("⚠️ [NonStream] GEAP MAX_TOKENS 时内容为空（thinking 耗尽 token 预算）",
 				"trace_id", traceID,
 				"prompt_tokens", promptTokens)
@@ -320,23 +330,22 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 				},
 			})
 			return
+		} else {
+			slog.Warn("⚠️ [NonStream] GEAP 返回空响应，上游未生成任何内容块",
+				"trace_id", traceID,
+				"geap_resp_preview", string(bodyBytes[:min(len(bodyBytes), 500)]))
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"type": "error",
+				"error": map[string]interface{}{
+					"type":    "overloaded_error",
+					"message": "Upstream model returned empty response — triggering automatic retry",
+				},
+			})
+			return
 		}
-
-		// 其他空响应情况（如 STOP + 空 text）→ 返回 overloaded_error 触发自动重试
-		slog.Warn("⚠️ [NonStream] GEAP 返回空响应，上游未生成任何内容块",
-			"trace_id", traceID,
-			"geap_resp_preview", string(bodyBytes[:min(len(bodyBytes), 500)]))
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"type": "error",
-			"error": map[string]interface{}{
-				"type":    "overloaded_error",
-				"message": "Upstream model returned empty response — triggering automatic retry",
-			},
-		})
-		return
 	}
 
 	anthropicResp := MessageResponse{

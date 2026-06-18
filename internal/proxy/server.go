@@ -280,7 +280,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	finalReqModel = modelName
 	finalReqBody = bodyBytes
 
-	maxRetries := 1 // Limit to 1 retry (2 attempts total) for faster failover
+	maxRetries := 2 // 最多重试 2 次（共 3 次尝试），确保在多账号场景下有足够容错
 	var lastErr error
 	var lastStatusCode int // 记录最后一次上游 HTTP 状态码
 	var sawRateLimit bool  // 任意一次上游返回 429，优先用 overloaded_error 而非 api_error

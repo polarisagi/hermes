@@ -564,18 +564,25 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		flushFallbackBuffer()
 	}
 
-	// 上游返回空响应处理：区分 MAX_TOKENS 和其他空响应两种情况
+	// 上游返回空响应处理：区分 compact 模式、MAX_TOKENS 和其他空响应
 	if streamError == "" && blockIndex == 0 && !inThinking && !emittedText {
-		if stopReason == "max_tokens" {
-			// MAX_TOKENS + 无内容：thinking 耗尽 token 预算，正文为空。
-			// 不触发重试（重试不能改变 token 上限），直接返回 max_tokens 停止原因。
-			// 流式协议要求先发 message_delta（含 stop_reason），再发 message_stop。
+		if isCompact {
+			// /compact 模式无内容：上游可能仅返回 thought 或空响应。
+			// 发送降级 compaction 块避免 Claude Code 报 "empty response" 错误。
+			fallbackContent := anthr.GenerateFallbackCompactContent(stopReason)
+			slog.Warn("⚠️ [Stream] /compact 无文本内容，发送降级 compaction 块",
+				"trace_id", traceID,
+				"stop_reason", stopReason,
+				"prompt_tokens", promptTokens)
+			compactManager.BufferText(fallbackContent)
+			inText = true
+			emittedText = true
+			stopReason = "end_turn"
+		} else if stopReason == "max_tokens" {
 			slog.Warn("⚠️ [Stream] GEAP MAX_TOKENS 时内容为空（thinking 耗尽 token 预算）",
 				"trace_id", traceID,
 				"prompt_tokens", promptTokens)
-			// 不设置 streamError，让流程自然走到下方的 message_delta/message_stop 发送逻辑
 		} else {
-			// 其他空响应（STOP + 空 text 等）→ 触发自动重试
 			slog.Warn("⚠️ [Stream] GEAP 返回空响应，上游未生成任何内容块",
 				"trace_id", traceID,
 				"prompt_tokens", promptTokens)
