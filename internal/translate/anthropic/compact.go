@@ -156,76 +156,148 @@ func HasRealContentMapSlice(contents []map[string]interface{}) bool {
 
 // ProcessCompactNonStream 处理非流式响应的 /compact 逻辑。
 //
-// 将响应内容块中第一个 text 或 compaction 块转换为标准的 compaction 格式：
+// 合并所有 text 和 compaction 块为单一的 compaction 格式：
 //   - type 设为 "compaction"
-//   - content 字段存放摘要文本（如缺失 <summary> 标签则自动补全）
-//   - text 字段清空
+//   - content 字段存放合并后的摘要文本（如缺失 <summary> 标签则自动补全）
+//   - 非文本块（tool_use 等）按原样保留
 //
-// 支持 []Content（togoogle 强类型）和 []interface{}（toopenai 动态 map）两种输入
-func ProcessCompactNonStream(contents interface{}) {
+// Gemini 可能返回多个 text/compaction 块（如 thinking 文本 + summary 文本），
+// 必须全部合并，否则只取第一个会导致摘要内容不完整。
+//
+// 支持三种内容切片类型，返回合并后不含重复文本块的新切片。
+func ProcessCompactNonStream(contents interface{}) interface{} {
 	switch v := contents.(type) {
 	case []Content:
+		var mergedText strings.Builder
+		var compactIdx int = -1
 		for i, c := range v {
 			if c.Type == "text" || c.Type == "compaction" {
-				var contentStr string
-				if str, ok := c.Content.(string); ok {
-					contentStr = str
-				} else {
-					contentStr = c.Text
+				if compactIdx == -1 {
+					compactIdx = i
 				}
-				wrappedText := WrapCompactText(contentStr)
-				if wrappedText != contentStr {
-					slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+				if str, ok := c.Content.(string); ok && str != "" {
+					if mergedText.Len() > 0 {
+						mergedText.WriteString("\n\n")
+					}
+					mergedText.WriteString(str)
+				} else if c.Text != "" {
+					if mergedText.Len() > 0 {
+						mergedText.WriteString("\n\n")
+					}
+					mergedText.WriteString(c.Text)
 				}
-				v[i].Type = "compaction"
-				v[i].Content = wrappedText
-				v[i].Text = "" // 清空 text 字段
-				break
 			}
 		}
+		if compactIdx >= 0 {
+			result := make([]Content, 0, len(v))
+			for i, c := range v {
+				if c.Type == "text" || c.Type == "compaction" {
+					if i == compactIdx {
+						wrappedText := WrapCompactText(mergedText.String())
+						if wrappedText != mergedText.String() {
+							slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+						}
+						result = append(result, Content{
+							Type:    "compaction",
+							Content: wrappedText,
+						})
+					}
+				} else {
+					result = append(result, c)
+				}
+			}
+			return result
+		}
 	case []interface{}:
-		for _, contentRaw := range v {
+		var mergedText strings.Builder
+		var compactIdx int = -1
+		for i, contentRaw := range v {
 			if content, ok := contentRaw.(map[string]interface{}); ok {
 				t, _ := content["type"].(string)
 				if t == "text" || t == "compaction" {
-					var contentStr string
-					if str, ok := content["content"].(string); ok {
-						contentStr = str
-					} else if str, ok := content["text"].(string); ok {
-						contentStr = str
+					if compactIdx == -1 {
+						compactIdx = i
 					}
-					wrappedText := WrapCompactText(contentStr)
-					if wrappedText != contentStr {
-						slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+					if str, ok := content["content"].(string); ok && str != "" {
+						if mergedText.Len() > 0 {
+							mergedText.WriteString("\n\n")
+						}
+						mergedText.WriteString(str)
+					} else if str, ok := content["text"].(string); ok && str != "" {
+						if mergedText.Len() > 0 {
+							mergedText.WriteString("\n\n")
+						}
+						mergedText.WriteString(str)
 					}
-					content["type"] = "compaction"
-					content["content"] = wrappedText
-					delete(content, "text")
-					break
 				}
 			}
+		}
+		if compactIdx >= 0 {
+			result := make([]interface{}, 0, len(v))
+			for i, contentRaw := range v {
+				if content, ok := contentRaw.(map[string]interface{}); ok {
+					if t, _ := content["type"].(string); t == "text" || t == "compaction" {
+						if i == compactIdx {
+							wrappedText := WrapCompactText(mergedText.String())
+							if wrappedText != mergedText.String() {
+								slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+							}
+							result = append(result, map[string]interface{}{
+								"type":    "compaction",
+								"content": wrappedText,
+							})
+						}
+					} else {
+						result = append(result, contentRaw)
+					}
+				}
+			}
+			return result
 		}
 	case []map[string]interface{}:
-		for _, content := range v {
+		var mergedText strings.Builder
+		var compactIdx int = -1
+		for i, content := range v {
 			t, _ := content["type"].(string)
 			if t == "text" || t == "compaction" {
-				var contentStr string
-				if str, ok := content["content"].(string); ok {
-					contentStr = str
-				} else if str, ok := content["text"].(string); ok {
-					contentStr = str
+				if compactIdx == -1 {
+					compactIdx = i
 				}
-				wrappedText := WrapCompactText(contentStr)
-				if wrappedText != contentStr {
-					slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+				if str, ok := content["content"].(string); ok && str != "" {
+					if mergedText.Len() > 0 {
+						mergedText.WriteString("\n\n")
+					}
+					mergedText.WriteString(str)
+				} else if str, ok := content["text"].(string); ok && str != "" {
+					if mergedText.Len() > 0 {
+						mergedText.WriteString("\n\n")
+					}
+					mergedText.WriteString(str)
 				}
-				content["type"] = "compaction"
-				content["content"] = wrappedText
-				delete(content, "text")
-				break
 			}
 		}
+		if compactIdx >= 0 {
+			result := make([]map[string]interface{}, 0, len(v))
+			for i, content := range v {
+				if t, _ := content["type"].(string); t == "text" || t == "compaction" {
+					if i == compactIdx {
+						wrappedText := WrapCompactText(mergedText.String())
+						if wrappedText != mergedText.String() {
+							slog.Info("🔍 [DEBUG] /compact 响应缺失 <summary> 标签，网关已自动补全")
+						}
+						result = append(result, map[string]interface{}{
+							"type":    "compaction",
+							"content": wrappedText,
+						})
+					}
+				} else {
+					result = append(result, content)
+				}
+			}
+			return result
+		}
 	}
+	return contents
 }
 
 // CompactStreamManager 管理流式 /compact 响应的缓冲与发射。

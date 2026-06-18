@@ -107,7 +107,10 @@ func handleNonStream(w http.ResponseWriter, r *http.Request, resp *http.Response
 	}
 
 	if isCompact {
-		anthr.ProcessCompactNonStream(contents)
+		compactContents := anthr.ProcessCompactNonStream(contents)
+		if cc, ok := compactContents.([]map[string]interface{}); ok {
+			contents = cc
+		}
 	}
 
 	id := "msg_unknown"

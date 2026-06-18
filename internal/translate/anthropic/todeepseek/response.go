@@ -25,7 +25,10 @@ func handleDeepSeekNonStream(w http.ResponseWriter, r *http.Request, resp *http.
 
 	if isCompact {
 		if contents, ok := aResp["content"].([]interface{}); ok {
-			anthr.ProcessCompactNonStream(contents)
+			compactContents := anthr.ProcessCompactNonStream(contents)
+			if cc, ok := compactContents.([]interface{}); ok {
+				aResp["content"] = cc
+			}
 		}
 	}
 

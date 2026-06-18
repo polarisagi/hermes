@@ -289,7 +289,10 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 	// 判断是否存在真正有意义的内容块（使用公共辅助函数，支持 text/tool_use/thinking/compaction）
 	hasRealContent := anthr.HasRealContent(contents)
 	if isCompact && hasRealContent {
-		anthr.ProcessCompactNonStream(contents)
+		compactContents := anthr.ProcessCompactNonStream(contents)
+		if cc, ok := compactContents.([]Content); ok {
+			contents = cc
+		}
 	}
 
 	if !hasRealContent {

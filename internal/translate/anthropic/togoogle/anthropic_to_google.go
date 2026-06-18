@@ -68,25 +68,11 @@ func (t *Translator) TranslateRequest(
 		return geapBody, "/" + subpath, nil
 	}
 
-	vReq, _ := mapToVertexRequest(req, finalModel)
+	var vReq map[string]interface{}
 	if isCompact {
-		promptInjection := anthr.BuildCompactPrompt(&req)
-
-		vReq["contents"] = []map[string]interface{}{{
-			"role":  "user",
-			"parts": []map[string]interface{}{{"text": promptInjection}},
-		}}
-		delete(vReq, "systemInstruction")
-		delete(vReq, "tools")
-		delete(vReq, "toolConfig")
-		
-		if genCfg, ok := vReq["generationConfig"].(map[string]interface{}); ok {
-			genCfg["temperature"] = 0.0
-		} else {
-			vReq["generationConfig"] = map[string]interface{}{
-				"temperature": 0.0,
-			}
-		}
+		vReq = buildCompactVertexRequest(req, finalModel)
+	} else {
+		vReq, _ = mapToVertexRequest(req, finalModel)
 	}
 
 	vReqBytes, _ := json.Marshal(vReq)
@@ -171,6 +157,41 @@ func extractGeminiModelFromPath(path string) string {
 // generateTraceID 生成基于时间戳与随机数的短 ID，用于工具调用 ID、消息 ID 的唯一性保障。
 func generateTraceID() string {
 	return fmt.Sprintf("%x%04x", time.Now().UnixNano()&0xFFFFFFFF, rand.Intn(0x10000))
+}
+
+// buildCompactVertexRequest 为 /compact 请求构建最小 Vertex AI 请求。
+// 跳过 mapToVertexRequest 的昂贵工作（ContextManagement 编辑、消息映射等），
+// 因为 compact 模式会将其全部覆盖。直接构建仅含 compact prompt 的请求体。
+func buildCompactVertexRequest(req MessageRequest, model string) map[string]interface{} {
+	promptInjection := anthr.BuildCompactPrompt(&req)
+
+	vReq := map[string]interface{}{
+		"contents": []map[string]interface{}{{
+			"role":  "user",
+			"parts": []map[string]interface{}{{"text": promptInjection}},
+		}},
+		"generationConfig": map[string]interface{}{
+			"temperature": 0.0,
+			"thinkingConfig": map[string]interface{}{
+				"includeThoughts": false,
+			},
+		},
+		"safetySettings": geapSafetySettings,
+	}
+
+	if maxTokens := req.MaxTokens; maxTokens > 0 {
+		genCfg := vReq["generationConfig"].(map[string]interface{})
+		genCfg["maxOutputTokens"] = maxTokens
+	}
+
+	if req.Metadata != nil && req.Metadata.UserID != "" {
+		sanitized := sanitizeLabelValue(req.Metadata.UserID)
+		if sanitized != "" {
+			vReq["labels"] = map[string]string{"user-id": sanitized}
+		}
+	}
+
+	return vReq
 }
 
 func rewriteBodyForGEAPClaude(bodyBytes []byte, isCountTokens bool, targetModel string) ([]byte, error) {
