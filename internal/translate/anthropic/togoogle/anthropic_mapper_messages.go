@@ -28,7 +28,6 @@ func mapMessages(messages []Message, model string) ([]map[string]interface{}, er
 			role = "model"
 		}
 
-		var lastSignature string
 		var parts []map[string]interface{}
 
 		switch v := msg.Content.(type) {
@@ -39,22 +38,29 @@ func mapMessages(messages []Message, model string) ([]map[string]interface{}, er
 				if m, ok := item.(map[string]interface{}); ok {
 					switch m["type"] {
 					case "text":
-						textPart := map[string]interface{}{"text": m["text"]}
-						if lastSignature != "" {
-							textPart["thoughtSignature"] = lastSignature
-							lastSignature = ""
-						}
-						parts = append(parts, textPart)
+						// 不再将 thoughtSignature 挂到 text part——签名应属于 thought part
+						parts = append(parts, map[string]interface{}{"text": m["text"]})
 					case "thinking":
-						if sig, _ := m["signature"].(string); sig != "" {
-							lastSignature = sig
+						// Gemini 3.x 历史回放要求：保留 thought=true part 并携带 thoughtSignature。
+						// 之前的做法是丢弃 thinking 内容并把签名挂到下一个 text part，位置错误。
+						// 正确做法：重建为原生 thought part，让 Gemini 识别并恢复思考连贯性。
+						// 签名缺失时使用官方 bypass 值通知 Gemini 跳过签名验证。
+						sig, _ := m["signature"].(string)
+						if sig == "" {
+							sig = skipThoughtSigValidator
 						}
-						continue
+						thinkText, _ := m["thinking"].(string)
+						parts = append(parts, map[string]interface{}{
+							"thought":          true,
+							"text":             thinkText,
+							"thoughtSignature": sig,
+						})
 					case "compaction":
 						if content, ok := m["content"].(string); ok && content != "" {
 							parts = append(parts, map[string]interface{}{"text": content})
 						}
 					case "redacted_thinking":
+						// 无内容可映射，跳过
 						continue
 					case "image", "audio", "video", "media":
 						if source, ok := m["source"].(map[string]interface{}); ok {
@@ -69,7 +75,8 @@ func mapMessages(messages []Message, model string) ([]map[string]interface{}, er
 							}
 						}
 					case "tool_use":
-						parsedParts := parseToolUseBlock(m, model, lastSignature, flattenedTools)
+						// lastSignature 参数已废弃（thinking 块现在内联转换为 thought part），传空字符串
+						parsedParts := parseToolUseBlock(m, model, "", flattenedTools)
 						parts = append(parts, parsedParts...)
 					case "tool_result":
 						parts = append(parts, parseToolResultBlock(m, toolMap, flattenedTools)...)
@@ -79,7 +86,9 @@ func mapMessages(messages []Message, model string) ([]map[string]interface{}, er
 		}
 
 		if len(parts) == 0 {
-			parts = append(parts, map[string]interface{}{"text": ""})
+			// 消息全为 redacted_thinking 等无法映射的块，跳过。
+			// 向 Gemini 发送空 turn 会产生噪音并可能引发空响应，直接忽略比注入 {"text":""} 更安全。
+			continue
 		}
 
 		contents = append(contents, map[string]interface{}{
@@ -119,11 +128,26 @@ func parseToolUseBlock(m map[string]interface{}, model, lastSignature string, fl
 	}
 
 	var thoughtSig string
-	if id, ok := m["id"].(string); ok && id != "" {
-		if sig, ok := toolThoughtSigCache.Load(id); ok {
+	toolUseID, _ := m["id"].(string)
+	if toolUseID != "" {
+		// 从全局缓存或 toolID 编码中提取 Gemini 原生调用 ID
+		if callID, ok := toolGeminiCallIDCache.Load(toolUseID); ok {
+			fc["id"] = callID.(string)
+		} else if idx := strings.Index(toolUseID, "_fcid_"); idx != -1 {
+			// 从 toolID 编码中解码（支持 _sig_ 后缀可能在 _fcid_ 之后）
+			remaining := toolUseID[idx+6:]
+			// _fcid_ 之后可能还有 _sig_ 尾缀
+			if sigIdx := strings.Index(remaining, "_sig_"); sigIdx != -1 {
+				fc["id"] = remaining[:sigIdx]
+			} else {
+				fc["id"] = remaining
+			}
+		}
+		// 提取 thoughtSignature
+		if sig, ok := toolThoughtSigCache.Load(toolUseID); ok {
 			thoughtSig = sig.(string)
-		} else if idx := strings.Index(id, "_sig_"); idx != -1 {
-			thoughtSig = id[idx+5:]
+		} else if idx := strings.Index(toolUseID, "_sig_"); idx != -1 {
+			thoughtSig = toolUseID[idx+5:]
 		}
 	}
 
@@ -135,7 +159,6 @@ func parseToolUseBlock(m map[string]interface{}, model, lastSignature string, fl
 	// - Gemini 3 在 functionCall part 上强制要求签名，缺失返回 400。
 	// - 有真实 Gemini 签名时直接使用；签名为空或为旧占位符时，改用官方 bypass 值
 	//   "skip_thought_signature_validator"，通知 Gemini 跳过验证（官方 FAQ 明确支持）。
-	// - 不再进行 XML 退化：退化会让 Gemini 把工具历史当普通文本，破坏后续 functionCall。
 	if thoughtSig == "" || thoughtSig == "fallback-no-sig" {
 		thoughtSig = skipThoughtSigValidator
 	}
@@ -196,11 +219,31 @@ func parseToolResultBlock(m map[string]interface{}, toolMap map[string]string, f
 		textPart := fmt.Sprintf("<past_tool_result name=\"%s\">\n%s\n</past_tool_result>", name, respContent["content"])
 		parts = append(parts, map[string]interface{}{"text": textPart})
 	} else {
+		// 构建 functionResponse：将 Gemini 原生调用 ID 回传（Gemini 2.5+/3.x 必须）
+		// 缺失此 ID 会导致 Gemini 无法匹配工具结果和调用，产生错乱或 400 错误
+		funcResp := map[string]interface{}{
+			"name":     name,
+			"response": respContent,
+		}
+		// 从全局缓存或 toolID 编码中提取 Gemini 原生调用 ID
+		var geminiCallID string
+		if toolUseID != "" {
+			if callID, ok := toolGeminiCallIDCache.Load(toolUseID); ok {
+				geminiCallID = callID.(string)
+			} else if idx := strings.Index(toolUseID, "_fcid_"); idx != -1 {
+				remaining := toolUseID[idx+6:]
+				if sigIdx := strings.Index(remaining, "_sig_"); sigIdx != -1 {
+					geminiCallID = remaining[:sigIdx]
+				} else {
+					geminiCallID = remaining
+				}
+			}
+		}
+		if geminiCallID != "" {
+			funcResp["id"] = geminiCallID
+		}
 		parts = append(parts, map[string]interface{}{
-			"functionResponse": map[string]interface{}{
-				"name":     name,
-				"response": respContent,
-			},
+			"functionResponse": funcResp,
 		})
 	}
 	return parts
@@ -235,7 +278,7 @@ func enforceAlternatingRoles(contents []map[string]interface{}) []map[string]int
 		if contents[len(contents)-1]["role"] == "model" {
 			contents = append(contents, map[string]interface{}{
 				"role":  "user",
-				"parts": []map[string]interface{}{{"text": "Please continue."}},
+				"parts": []map[string]interface{}{{"text": ""}},
 			})
 		}
 	}

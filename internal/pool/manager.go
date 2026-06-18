@@ -700,6 +700,76 @@ func (m *Manager) SelectBestChannelByProviderAndModel(ctx context.Context, clien
 	return m.selectBestWithWait(ctx, clientID, filter, DefaultWaitTimeout)
 }
 
+// SelectBestChannelByTierImmediate 立即抢占（不进入等待队列），仅返回当前可用渠道。
+// 用于重试场景：429/5xx 后快速切换到其他账号；若无立即可用账号则快速失败，避免等待同一个限流账号。
+func (m *Manager) SelectBestChannelByTierImmediate(_ context.Context, _ string, tier, requestedModelID string) (*ActiveChannel, string, error) {
+	filter := func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
+		var bestMod *domain.UserModel
+		for i := range ch.Models {
+			mod := &ch.Models[i]
+			if mod.CapabilityTier == tier && mod.IsActive {
+				if bestMod == nil {
+					bestMod = mod
+				} else {
+					if bestMod.IsLegacy && !mod.IsLegacy {
+						bestMod = mod
+					} else if bestMod.IsLegacy == mod.IsLegacy && mod.VersionWeight > bestMod.VersionWeight {
+						bestMod = mod
+					}
+				}
+			}
+		}
+		if bestMod != nil {
+			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
+			affinity := 0
+			lowerActual := strings.ToLower(info.ActualModelID)
+			lowerReq := strings.ToLower(requestedModelID)
+			if lowerActual == lowerReq {
+				affinity = 2
+			} else if strings.Contains(lowerActual, lowerReq) || strings.Contains(lowerReq, lowerActual) {
+				affinity = 1
+			}
+			return info.ActualModelID, info, affinity, true
+		}
+		return "", SysModelCacheInfo{}, 0, false
+	}
+	return m.selectBest(filter)
+}
+
+// SelectBestChannelByProviderAndModelImmediate 立即抢占（不进入等待队列），仅返回当前可用渠道。
+// 用于重试场景快速切换，失败则快速报错。
+func (m *Manager) SelectBestChannelByProviderAndModelImmediate(_ context.Context, _ string, providerID, modelID string) (*ActiveChannel, string, error) {
+	if providerID == "" || modelID == "" {
+		return nil, "", ErrChannelNotFound
+	}
+	filter := func(ch *ActiveChannel) (string, SysModelCacheInfo, int, bool) {
+		if ch.Provider.ProviderID != providerID {
+			return "", SysModelCacheInfo{}, 0, false
+		}
+		var bestMod *domain.UserModel
+		for i := range ch.Models {
+			mod := &ch.Models[i]
+			if mod.ModelID == modelID && mod.IsActive {
+				if bestMod == nil {
+					bestMod = mod
+				} else {
+					if bestMod.IsLegacy && !mod.IsLegacy {
+						bestMod = mod
+					} else if bestMod.IsLegacy == mod.IsLegacy && mod.VersionWeight > bestMod.VersionWeight {
+						bestMod = mod
+					}
+				}
+			}
+		}
+		if bestMod != nil {
+			info := m.resolveActualModelID(bestMod.ModelID, ch.Provider.ProviderID)
+			return info.ActualModelID, info, 2, true
+		}
+		return "", SysModelCacheInfo{}, 0, false
+	}
+	return m.selectBest(filter)
+}
+
 // ReleaseChannel 归还并发连接，并通知 FIFO 调度器有渠道释放
 func (m *Manager) ReleaseChannel(ch *ActiveChannel) {
 	if ch == nil {

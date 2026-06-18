@@ -170,10 +170,20 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 										Text: thinkText,
 									})
 								} else {
+									// Gemini 未返回 thoughtSignature 时用 bypass 值填充：
+									// 确保 Claude Code 存入历史的 thinking 块始终有非空签名，
+									// 下一轮回传时 mapper 能正确带回合法的 thoughtSignature。
+									effectiveSig := sig
+									if effectiveSig == "" {
+										effectiveSig = skipThoughtSigValidator
+										slog.Warn("⚠️ [NonStream] thinking 块缺少 thoughtSignature，使用 bypass 值",
+											"trace_id", traceID,
+										)
+									}
 									contents = append(contents, Content{
 										Type:      "thinking",
 										Thinking:  thinkText,
-										Signature: sig,
+										Signature: effectiveSig,
 									})
 								}
 							}
@@ -225,22 +235,38 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 								slog.Warn("⚠️ [NonStream] functionCall 缺少 name 字段，跳过", "trace_id", traceID)
 								continue
 							}
+							// 读取 Gemini 返回的原生调用 ID（Gemini 2.5+/3.x 必须在 functionResponse 中回传）
+							geminiCallID, _ := fc["id"].(string)
+
 							argsBytes := normalizeFunctionCallArgs(fc["args"])
 							var args map[string]interface{}
 							if err := json.Unmarshal(argsBytes, &args); err != nil {
 								args = make(map[string]interface{})
 							}
 							toolID := fmt.Sprintf("toolu_%s_%d", traceID, toolIdx)
-							// Gemini 3.x 在 functionCall part 携带 thoughtSignature，
-							// 存入缓存以便下一轮请求回填（否则 API 返回 400）
-							// 并将其编码到 toolID 中，确保服务重启后客户端历史依然能带回 signature
+							// 将 Gemini 原生调用 ID 编码到 toolID 中
+							if geminiCallID != "" {
+								toolID = fmt.Sprintf("%s_fcid_%s", toolID, geminiCallID)
+							}
+							// Gemini 3.x 在 functionCall part 携带 thoughtSignature
+							// 仅存入内存缓存，不拼入 toolID（sig 超长会破坏协议）
+							// 服务重启后缓存失效时以 skipThoughtSigValidator 兜底
 							if sig, ok := part["thoughtSignature"].(string); ok && sig != "" {
-								toolID = fmt.Sprintf("%s_sig_%s", toolID, sig)
 								toolThoughtSigCache.Store(toolID, sig)
 							} else if lastSig != "" {
-								toolID = fmt.Sprintf("%s_sig_%s", toolID, lastSig)
 								toolThoughtSigCache.Store(toolID, lastSig)
 							}
+							// 记录 Gemini 原生调用 ID 到全局缓存
+							if geminiCallID != "" {
+								toolGeminiCallIDCache.Store(toolID, geminiCallID)
+							}
+							slog.Info("🔧 [NonStream] Gemini functionCall 检测",
+								"trace_id", traceID,
+								"tool_name", name,
+								"tool_id", toolID,
+								"gemini_call_id", geminiCallID,
+								"tool_idx", toolIdx,
+							)
 							contents = append(contents, Content{
 								Type:  "tool_use",
 								ID:    toolID,
@@ -263,15 +289,39 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 	}
 
 	if !hasRealContent {
-		// 上游返回空响应 → 返回 Anthropic 错误而非空 content
-		// 这里返回 529 overloaded_error 以触发 Claude Code 的自动重试机制
+		if stopReason == "max_tokens" {
+			// MAX_TOKENS + 无内容：thinking 消耗了全部 maxOutputTokens，正文为空。
+			// 返回合法的 max_tokens 响应而非 overloaded_error——
+			// 重试无法改变 token 上限，触发重试只会浪费配额。
+			// 客户端收到 stop_reason=max_tokens 后可选择扩大 max_tokens 再试。
+			slog.Warn("⚠️ [NonStream] GEAP MAX_TOKENS 时内容为空（thinking 耗尽 token 预算）",
+				"trace_id", traceID,
+				"prompt_tokens", promptTokens)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(MessageResponse{
+				ID:         fmt.Sprintf("msg_%s", traceID),
+				Type:       "message",
+				Role:       "assistant",
+				Model:      modelName,
+				StopReason: "max_tokens",
+				Content:    []Content{},
+				Usage: Usage{
+					InputTokens:          promptTokens,
+					OutputTokens:         completionTokens,
+					CacheReadInputTokens: cachedTokens,
+				},
+			})
+			return
+		}
+
+		// 其他空响应情况（如 STOP + 空 text）→ 返回 overloaded_error 触发自动重试
 		slog.Warn("⚠️ [NonStream] GEAP 返回空响应，上游未生成任何内容块",
 			"trace_id", traceID,
 			"geap_resp_preview", string(bodyBytes[:min(len(bodyBytes), 500)]))
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests) // 也可以使用 529，但 429 和 529 都会触发重试
-		// Anthropic SDK 遇到 429 或 529 会自动退避重试
+		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"type": "error",
 			"error": map[string]interface{}{

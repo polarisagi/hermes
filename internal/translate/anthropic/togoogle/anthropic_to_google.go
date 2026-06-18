@@ -1,13 +1,14 @@
 package togoogle
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/polarisagi/hermes/internal/domain"
 	"github.com/polarisagi/hermes/internal/translate"
@@ -108,7 +109,13 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 		strings.Contains(resp.Request.URL.Path, "stream")
 
 	isGEAPClaude := strings.Contains(resp.Request.URL.Path, "anthropic")
-	model := "google_model"
+	// 从响应 URL 路径提取真实的 Gemini 模型名，而非硬编码占位符
+	model := extractGeminiModelFromPath(resp.Request.URL.Path)
+	if model == "" {
+		model = "gemini"
+	}
+	// 生成唯一 traceID（时间戳 + 随机数），确保工具调用 ID 的全局唯一性
+	traceID := generateTraceID()
 
 	if isGEAPClaude {
 		if stream {
@@ -136,14 +143,35 @@ func (t *Translator) TranslateResponse(w http.ResponseWriter, r *http.Request, r
 		}
 
 		if stream {
-			streamAnthropicResponse(context.Background(), w, resp, req, "", nil, "Anthropic-Adapter", model, reqBody, isCompact)
+			// 使用 r.Context() 确保客户端断开时能取消上游流读取，避免资源浪费
+			streamAnthropicResponse(r.Context(), w, resp, req, traceID, nil, "Anthropic-Adapter", model, reqBody, isCompact)
 		} else {
-			handleAnthropicNonStreamResponse(w, resp, req, "", nil, "Anthropic-Adapter", model, reqBody, isCompact)
+			handleAnthropicNonStreamResponse(w, resp, req, traceID, nil, "Anthropic-Adapter", model, reqBody, isCompact)
 		}
 	}
 	return nil
 }
 
+
+// extractGeminiModelFromPath 从 Gemini API 请求路径提取模型名。
+// 路径格式：/models/{model}:generateContent 或 /models/{model}:streamGenerateContent
+func extractGeminiModelFromPath(path string) string {
+	const prefix = "/models/"
+	idx := strings.Index(path, prefix)
+	if idx == -1 {
+		return ""
+	}
+	sub := path[idx+len(prefix):]
+	if i := strings.IndexAny(sub, ":?"); i != -1 {
+		sub = sub[:i]
+	}
+	return sub
+}
+
+// generateTraceID 生成基于时间戳与随机数的短 ID，用于工具调用 ID、消息 ID 的唯一性保障。
+func generateTraceID() string {
+	return fmt.Sprintf("%x%04x", time.Now().UnixNano()&0xFFFFFFFF, rand.Intn(0x10000))
+}
 
 func rewriteBodyForGEAPClaude(bodyBytes []byte, isCountTokens bool, targetModel string) ([]byte, error) {
 	var m map[string]interface{}

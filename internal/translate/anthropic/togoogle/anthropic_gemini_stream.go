@@ -309,7 +309,7 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 			part, _ := partIntf.(map[string]interface{})
 
 			// 诊断日志：记录每个 part 的类型，方便排查思考内容是否携带 thought=true 标记
-			if slog.Default().Enabled(nil, slog.LevelDebug) {
+			if slog.Default().Enabled(context.TODO(), slog.LevelDebug) {
 				isThoughtField, _ := part["thought"].(bool)
 				_, hasFuncCall := part["functionCall"]
 				_, hasSig := part["thoughtSignature"]
@@ -489,18 +489,37 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 					slog.Warn("⚠️ [Stream] functionCall 缺少 name 字段，跳过", "trace_id", traceID)
 					continue
 				}
+				// 读取 Gemini 返回的调用 ID（Gemini 2.5+/3.x 必须在 functionResponse 中回传此 ID）
+				geminiCallID, _ := fc["id"].(string)
+
 				toolID = fmt.Sprintf("toolu_%s_%d", traceID, blockIndex)
-				// Gemini 3.x 在 functionCall part 携带 thoughtSignature，
-				// 存入缓存以便下一轮请求回填（否则 API 返回 400）
-				// 并将其编码到 toolID 中，确保服务重启后客户端历史依然能带回 signature
+				// 将 Gemini 原生调用 ID 编码到 toolID 中，下一轮回传时由 parseToolUseBlock 解码取出
+				if geminiCallID != "" {
+					toolID = fmt.Sprintf("%s_fcid_%s", toolID, geminiCallID)
+				}
+
+				// Gemini 3.x 在 functionCall part 携带 thoughtSignature
+				// 仅存入内存缓存，不拼入 toolID（sig 超长会破坏协议，Claude Code 无法处理）
+				// 服务重启后缓存失效时以 skipThoughtSigValidator 兜底
 				if sig, ok := part["thoughtSignature"].(string); ok && sig != "" {
 					thoughtSig = sig // 保存给后续平行的 functionCall 使用
-					toolID = fmt.Sprintf("%s_sig_%s", toolID, sig)
 					toolThoughtSigCache.Store(toolID, sig)
 				} else if thoughtSig != "" {
-					toolID = fmt.Sprintf("%s_sig_%s", toolID, thoughtSig)
 					toolThoughtSigCache.Store(toolID, thoughtSig)
 				}
+
+				// 记录 Gemini 原生调用 ID 到全局缓存，供回传 functionResponse 时使用
+				if geminiCallID != "" {
+					toolGeminiCallIDCache.Store(toolID, geminiCallID)
+				}
+
+				slog.Info("🔧 [Stream] Gemini functionCall 检测",
+					"trace_id", traceID,
+					"tool_name", name,
+					"tool_id", toolID,
+					"gemini_call_id", geminiCallID,
+					"block_index", blockIndex,
+				)
 
 				writeSSE(w, flusher, "content_block_start", StreamEvent{
 					Type:  "content_block_start",
@@ -545,13 +564,23 @@ func streamAnthropicResponse(ctx context.Context, w http.ResponseWriter, vertexR
 		flushFallbackBuffer()
 	}
 
-	// 上游返回空响应 → 发送 Anthropic 错误事件，而非注入空文本块
-	// 空文本块会导致 Claude Code /compact 报 "summarization produced empty response"，掩盖真正原因
+	// 上游返回空响应处理：区分 MAX_TOKENS 和其他空响应两种情况
 	if streamError == "" && blockIndex == 0 && !inThinking && !emittedText {
-		slog.Warn("⚠️ [Stream] GEAP 返回空响应，上游未生成任何内容块",
-			"trace_id", traceID,
-			"prompt_tokens", promptTokens)
-		streamError = "upstream model returned empty response — triggering automatic retry"
+		if stopReason == "max_tokens" {
+			// MAX_TOKENS + 无内容：thinking 耗尽 token 预算，正文为空。
+			// 不触发重试（重试不能改变 token 上限），直接返回 max_tokens 停止原因。
+			// 流式协议要求先发 message_delta（含 stop_reason），再发 message_stop。
+			slog.Warn("⚠️ [Stream] GEAP MAX_TOKENS 时内容为空（thinking 耗尽 token 预算）",
+				"trace_id", traceID,
+				"prompt_tokens", promptTokens)
+			// 不设置 streamError，让流程自然走到下方的 message_delta/message_stop 发送逻辑
+		} else {
+			// 其他空响应（STOP + 空 text 等）→ 触发自动重试
+			slog.Warn("⚠️ [Stream] GEAP 返回空响应，上游未生成任何内容块",
+				"trace_id", traceID,
+				"prompt_tokens", promptTokens)
+			streamError = "upstream model returned empty response — triggering automatic retry"
+		}
 	}
 
 	if streamError != "" {

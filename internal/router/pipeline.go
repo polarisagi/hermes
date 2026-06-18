@@ -303,6 +303,66 @@ func (p *Pipeline) resolveCapabilityTier(ctx context.Context, requestedModelID s
 	return inferredTier, src
 }
 
+// RouteRequestImmediate 仅抢占当前立即可用的渠道，不进入公平排队队列。
+// 用于 429/5xx 重试：优先切换到其他可用账号；若无立即可用账号则快速失败，
+// 由客户端（如 Claude Code）自行 backoff 后重试，避免占用网关连接等待同一限流账号恢复。
+func (p *Pipeline) RouteRequestImmediate(ctx context.Context, requestedModelID, clientID string) (*pool.ActiveChannel, string, error) {
+	executeImmediate := func(targets []TargetPlatformRoute) (*pool.ActiveChannel, string, error) {
+		for _, target := range targets {
+			ch, actualModel, err := p.chanManager.SelectBestChannelByProviderAndModelImmediate(ctx, clientID, target.ProviderID, target.ModelID)
+			if err == nil {
+				slog.Info("重试：自定义路由立即抢占成功", "model", requestedModelID, "actual", actualModel, "provider", ch.Provider.ProviderID, "account", ch.Provider.Name)
+				return ch, actualModel, nil
+			}
+		}
+		return nil, "", pool.ErrAllChannelsBusy
+	}
+
+	// [P1] 自定义硬路由
+	if targets := p.checkCustomRoute(requestedModelID); len(targets) > 0 {
+		if ch, model, err := executeImmediate(targets); err == nil {
+			return ch, model, nil
+		}
+	}
+
+	tier, _ := p.resolveCapabilityTier(ctx, requestedModelID)
+
+	// [P2] 梯队级别自定义路由
+	p.mu.RLock()
+	tierTargets := p.customRouteMap[tier]
+	p.mu.RUnlock()
+	if len(tierTargets) > 0 {
+		if ch, model, err := executeImmediate(tierTargets); err == nil {
+			return ch, model, nil
+		}
+	}
+
+	// [P3] 全局通配符路由
+	if wildcardTargets := p.checkWildcardRoute(); len(wildcardTargets) > 0 {
+		if ch, model, err := executeImmediate(wildcardTargets); err == nil {
+			return ch, model, nil
+		}
+	}
+
+	// [P4] 梯队智能轮询（立即抢占，不等待）
+	var tiersToTry []string
+	switch tier {
+	case "fast":
+		tiersToTry = []string{"fast", "smart"}
+	default:
+		tiersToTry = []string{"smart", "fast"}
+	}
+	for _, t := range tiersToTry {
+		ch, model, err := p.chanManager.SelectBestChannelByTierImmediate(ctx, clientID, t, requestedModelID)
+		if err == nil {
+			slog.Info("重试：智能路由立即抢占成功", "model", requestedModelID, "actual", model, "tier", t, "provider", ch.Provider.ProviderID, "account", ch.Provider.Name)
+			return ch, model, nil
+		}
+	}
+
+	return nil, "", pool.ErrAllChannelsBusy
+}
+
 func (p *Pipeline) checkCustomRoute(requestedModelID string) []TargetPlatformRoute {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

@@ -290,23 +290,47 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		activeChan, actualModel, err := s.pipeline.RouteRequest(r.Context(), modelName, clientName)
+		var activeChan *pool.ActiveChannel
+		var actualModel string
+		var routeErr error
+
+		if attempt == 0 {
+			// 首次请求：使用公平排队路由，可等待直到有可用渠道
+			activeChan, actualModel, routeErr = s.pipeline.RouteRequest(r.Context(), modelName, clientName)
+		} else {
+			// 重试：仅抢占当前立即可用的渠道，不进入等待队列。
+			// 若无立即可用的其他账号（单账号 429 场景），快速失败让客户端 backoff 后重试，
+			// 避免网关长时间等待同一限流账号的 Cooldown 结束。
+			activeChan, actualModel, routeErr = s.pipeline.RouteRequestImmediate(r.Context(), modelName, clientName)
+			if routeErr != nil {
+				slog.Warn("重试时无立即可用的备用渠道，快速失败",
+					"attempt", attempt,
+					"model", modelName,
+					"last_err", lastErr,
+				)
+				skipBilling = true
+				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "overloaded_error",
+					"Upstream rate limited and no alternative channel available. Please retry later.")
+				return
+			}
+		}
+
 		finalActualModel = actualModel
 		if activeChan != nil && activeChan.Provider != nil {
 			finalProviderName = activeChan.Provider.ProviderID
 			finalAccountName = activeChan.Provider.Name
 			finalProviderID = activeChan.Provider.ID
 		}
-		if err != nil {
+		if routeErr != nil {
 			skipBilling = true
-			// ErrAllChannelsBusy：Manager 层已内置排队等待（最长 10 分钟），
+			// ErrAllChannelsBusy：Manager 层已内置排队等待（最长 5 分钟），
 			// 返回此错误说明已等待超时，无需在此层再次重试。
-			if errors.Is(err, pool.ErrAllChannelsBusy) {
-				slog.Error("路由匹配失败 (所有可用渠道均繁忙/熔断/额度耗尽)", "requested_model", modelName, "error", err)
+			if errors.Is(routeErr, pool.ErrAllChannelsBusy) {
+				slog.Error("路由匹配失败 (所有可用渠道均繁忙/熔断/额度耗尽)", "requested_model", modelName, "error", routeErr)
 				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "rate_limit_error",
 					"All upstream channels are currently busy, cooling down, or exhausted. Please try again later.")
 			} else {
-				slog.Error("路由匹配失败 (无满足条件的可用模型/节点)", "requested_model", modelName, "error", err)
+				slog.Error("路由匹配失败 (无满足条件的可用模型/节点)", "requested_model", modelName, "error", routeErr)
 				s.writeError(w, clientProtocol, http.StatusServiceUnavailable, "invalid_request_error",
 					"No available models found for the requested capability tier. Please check your system model configurations.")
 			}
@@ -461,7 +485,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			slog.Warn("上游返回错误状态码，准备重试", "attempt", attempt, "status", resp.StatusCode, "provider", activeChan.Provider.ProviderID)
+			errBody, _ := io.ReadAll(resp.Body)
+			errSnippet := string(errBody)
+			if len(errSnippet) > 1000 {
+				errSnippet = errSnippet[:1000] + "...(truncated)"
+			}
+			slog.Warn("上游返回错误状态码，准备重试", "attempt", attempt, "status", resp.StatusCode, "provider", activeChan.Provider.ProviderID, "error_body", errSnippet)
 			s.chanManager.ReportError(activeChan, resp.StatusCode)
 			s.chanManager.ReleaseChannel(activeChan)
 			resp.Body.Close()

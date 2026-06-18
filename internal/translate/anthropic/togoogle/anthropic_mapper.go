@@ -15,6 +15,11 @@ import (
 // 否则返回 400 "Function call is missing a thought_signature"。
 var toolThoughtSigCache sync.Map
 
+// toolGeminiCallIDCache 跨请求保存 Gemini 2.5+/3.x functionCall 返回的原生调用 ID。
+// key: tool_use_id（Anthropic 格式）→ value: Gemini functionCall.id
+// Gemini 要求 functionResponse 必须回传该 ID，否则多轮工具调用中模型无法正确匹配结果。
+var toolGeminiCallIDCache sync.Map
+
 // geapSafetySettings BLOCK_NONE 安全配置，针对所有文本内容类别
 // 原因：Claude Code 频繁发送含代码、安全研究、命令行等内容，Gemini 默认阈值会误触安全过滤器
 // 本网关作为 API 代理，上游客户端已自行承担内容责任，无需二次拦截
@@ -117,7 +122,10 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 		"parts": systemParts,
 	}
 
-	mappedContents, _ := mapMessages(req.Messages, model)
+	// 执行 Anthropic ContextManagement 编辑指令（清理旧 thinking 块、旧工具结果等），
+	// 对齐 Anthropic 原生 API 在发往模型前的预处理行为。
+	cleanedMsgs := applyContextManagementEdits(req.Messages, req.ContextManagement)
+	mappedContents, _ := mapMessages(cleanedMsgs, model)
 	if len(mappedContents) > 0 {
 		vertexReq["contents"] = mappedContents
 	}
@@ -225,6 +233,34 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 					"includeThoughts": true,
 					"thinkingLevel":   "LOW",
 				}
+				vertexReq["generationConfig"] = genConfig
+			}
+		}
+	}
+
+	// Gemini 3.x maxOutputTokens 补偿：
+	// Anthropic max_tokens 仅计响应文本，thinking 由 budget_tokens 单独控制；
+	// 而 Gemini 的 maxOutputTokens = thinking token + 响应 token 合并上限。
+	// 若不补充思考预算，Gemini 在思考阶段就耗尽配额，导致正文为空（MAX_TOKENS + no parts）。
+	// 策略：在 thinkingConfig 确定后，将对应 level 的估算开销叠加到 maxOutputTokens。
+	if gcommon.IsGemini3Model(model) && req.MaxTokens > 0 {
+		if tc, ok := genConfig["thinkingConfig"].(map[string]interface{}); ok {
+			if includeThoughts, _ := tc["includeThoughts"].(bool); includeThoughts {
+				overhead := 8000 // MEDIUM 默认开销
+				switch tc["thinkingLevel"] {
+				case "HIGH":
+					// 客户端明确开启且有 budget_tokens 时，尊重客户端预算；否则用估算值
+					if req.Thinking != nil && req.Thinking.BudgetTokens > 0 {
+						overhead = req.Thinking.BudgetTokens
+					} else {
+						overhead = 16000
+					}
+				case "MEDIUM":
+					overhead = 8000
+				case "LOW":
+					overhead = 2000
+				}
+				genConfig["maxOutputTokens"] = req.MaxTokens + overhead
 				vertexReq["generationConfig"] = genConfig
 			}
 		}
