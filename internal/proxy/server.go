@@ -613,17 +613,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //   - google:    {"error":{"code":N,"message":"...","status":"RESOURCE_EXHAUSTED"}}
 func (s *Server) writeError(w http.ResponseWriter, clientProtocol string, statusCode int, errType, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	// Retry-After：告知客户端等待多少秒再重试，优先于指数退避
-	// Anthropic SDK/Claude Code 会读取此 header 作为 backoff 起点。
-	// 与 pool/manager.go 的 Cooldown 时长对齐：
-	//   429 rate_limit_error → 网关冷却 60 秒，客户端等 30 秒后重试（网关有可能已切换到其他账号）
-	//   529 overloaded_error → 网关冷却 60 秒，客户端等 65 秒（覆盖冷却 + 5 秒缓冲）
-	switch statusCode {
-	case http.StatusTooManyRequests:
-		w.Header().Set("Retry-After", "30")
-	case 529:
-		w.Header().Set("Retry-After", "65")
-	}
 	w.WriteHeader(statusCode)
 
 	var errPayload []byte
