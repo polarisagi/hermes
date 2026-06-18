@@ -5,8 +5,6 @@ package togoogle
 import (
 	"strings"
 	"sync"
-
-	gcommon "github.com/polarisagi/hermes/internal/translate/google"
 )
 
 // toolThoughtSigCache 跨请求保存 Gemini 3.x functionCall 携带的 thoughtSignature。
@@ -15,7 +13,7 @@ import (
 // 否则返回 400 "Function call is missing a thought_signature"。
 var toolThoughtSigCache sync.Map
 
-// toolGeminiCallIDCache 跨请求保存 Gemini 2.5+/3.x functionCall 返回的原生调用 ID。
+// toolGeminiCallIDCache 跨请求保存 Gemini functionCall 返回的原生调用 ID。
 // key: tool_use_id（Anthropic 格式）→ value: Gemini functionCall.id
 // Gemini 要求 functionResponse 必须回传该 ID，否则多轮工具调用中模型无法正确匹配结果。
 var toolGeminiCallIDCache sync.Map
@@ -107,6 +105,10 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 		case []interface{}:
 			for _, item := range sys {
 				if m, ok := item.(map[string]interface{}); ok {
+					// 只处理 text 类型的 system block，非文本块（如 image）静默跳过
+					if m["type"] != "text" {
+						continue
+					}
 					if text, ok := m["text"].(string); ok {
 						systemParts = append(systemParts, map[string]interface{}{"text": text})
 					}
@@ -146,59 +148,34 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 	if len(req.StopSequences) > 0 {
 		genConfig["stopSequences"] = req.StopSequences
 	}
-	// 扩展思考映射：Anthropic thinking 配置 → Gemini thinkingConfig
+	// 扩展思考映射：Anthropic thinking 配置 → Gemini thinkingConfig（仅 Gemini 3.x）
 	// 新格式（2026）：type="adaptive" + 顶层 effort 字段（"low"/"medium"/"high"/"max"/"ultra_code"）
-	// 旧格式（已废弃）：type="enabled" + budget_tokens
-	// 禁用：type="disabled"
-	// Gemini 2.5：thinkingBudget（整数 token 数）
-	// Gemini 3.x：thinkingLevel（LOW/MEDIUM/HIGH），两者不可同时使用（API 会返回 400）
-	// includeThoughts:true 让 Gemini 在响应中返回 thought 标记的 parts，
-	// 流式/非流式处理器会将其转换为 Anthropic thinking 内容块 + signature_delta
-	thinkingEnabled := req.Thinking != nil &&
-		(req.Thinking.Type == "enabled" || req.Thinking.Type == "adaptive")
-	thinkingExplicitlyDisabled := req.Thinking != nil && req.Thinking.Type == "disabled"
-
+	// 旧格式（向后兼容）：type="enabled" + budget_tokens
+	// 禁用：type="disabled" → 映射到 "LOW"（保留基础推理，完全关闭降低质量）
+	// includeThoughts:true 让 Gemini 在响应中返回 thought parts，
+	// 流式/非流式处理器将其转换为 Anthropic thinking 内容块 + signature_delta
 	switch {
-	case thinkingEnabled:
+	case req.Thinking != nil && (req.Thinking.Type == "enabled" || req.Thinking.Type == "adaptive"):
 		// 客户端明确开启思考，按 effort 映射
-		if gcommon.IsGemini3Model(model) {
-			// Gemini 3.x：使用 thinkingLevel 枚举，不接受 thinkingBudget 整数
-			genConfig["thinkingConfig"] = map[string]interface{}{
-				"includeThoughts": true,
-				"thinkingLevel":   effortToThinkingLevel(req.Effort, req.Thinking.BudgetTokens),
-			}
-		} else {
-			// Gemini 2.5：使用 thinkingBudget 整数
-			thinkingCfg := map[string]interface{}{
-				"includeThoughts": true,
-			}
-			if req.Thinking.BudgetTokens > 0 {
-				thinkingCfg["thinkingBudget"] = req.Thinking.BudgetTokens
-			}
-			genConfig["thinkingConfig"] = thinkingCfg
+		genConfig["thinkingConfig"] = map[string]interface{}{
+			"includeThoughts": true,
+			"thinkingLevel":   effortToThinkingLevel(req.Effort, req.Thinking.BudgetTokens),
 		}
-	case thinkingExplicitlyDisabled:
-		// 客户端明确禁用思考
-		// Gemini 3.x 默认开启 HIGH 思考，需显式设为 LOW（最低档）以尽可能尊重客户端意图
-		// 注意：若请求含 tools，下方的工具兜底逻辑会覆盖此设置（Gemini 需要思考才能正确使用工具）
-		// Gemini 2.5 不可靠地支持 thinkingBudget=0 禁用，不设置让其自决
-		// 工具兜底逻辑同样会接管（见下方）
-		if gcommon.IsGemini3Model(model) {
-			genConfig["thinkingConfig"] = map[string]interface{}{
-				"includeThoughts": false,
-				"thinkingLevel":   "LOW",
-			}
+	case req.Thinking != nil && req.Thinking.Type == "disabled":
+		// 客户端要求禁用 → 降到 LOW 而非完全关闭，2026 年客户端不会真正关闭 thinking
+		genConfig["thinkingConfig"] = map[string]interface{}{
+			"includeThoughts": true,
+			"thinkingLevel":   "LOW",
 		}
 	default:
-		// 客户端未传 thinking 参数
-		// Gemini 3.x 在默认状态下内部思考但不返回 thought parts（除非设置 includeThoughts: true）
-		// 设置 includeThoughts: true + MEDIUM 以接收 thought parts，供流式处理器转换为 thinking 内容块
-		// Gemini 2.5 则让其自决
-		if gcommon.IsGemini3Model(model) {
-			genConfig["thinkingConfig"] = map[string]interface{}{
-				"includeThoughts": true,
-				"thinkingLevel":   "MEDIUM",
-			}
+		// 无 thinking 配置：优先尊重顶层 effort，没有则让模型自决（AUTO）
+		level := "AUTO"
+		if req.Effort != "" {
+			level = effortToThinkingLevel(req.Effort, 0)
+		}
+		genConfig["thinkingConfig"] = map[string]interface{}{
+			"includeThoughts": true,
+			"thinkingLevel":   level,
 		}
 	}
 	if len(genConfig) > 0 {
@@ -207,46 +184,24 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 
 	if mappedTools := mapTools(req.Tools); mappedTools != nil {
 		vertexReq["tools"] = mappedTools
-
-		// Gemini 2.5 自动 thinking（未显式配置 thinkingConfig）与 function calling 存在已知冲突：
-		// 模型在无法输出原生 thought 时，会生成 name="thought" 的非法 functionCall，导致 MALFORMED_FUNCTION_CALL。
-		// 由于 Gemini 2.5 Pro 不支持 thinkingBudget=0 来禁用思考，
-		// 我们统一设置 includeThoughts: true 允许原生思考，流式处理器会自动将其转换为 thinking 块，
-		// 从而避免模型尝试伪造 functionCall 引发崩溃。
-		// 同理适用于 Gemini 3.x：即使客户端设置了 disabled，有工具时也须开启思考以确保工具调用质量。
-		if _, hasExplicitThinking := genConfig["thinkingConfig"]; !hasExplicitThinking {
-			if gcommon.IsGemini3Model(model) {
-				// 工具兜底：优先尊重 effort，没有则默认 MEDIUM
-				genConfig["thinkingConfig"] = map[string]interface{}{
-					"includeThoughts": true,
-					"thinkingLevel":   effortToThinkingLevel(req.Effort, 0),
-				}
-			} else {
-				genConfig["thinkingConfig"] = map[string]interface{}{"includeThoughts": true}
-			}
-			vertexReq["generationConfig"] = genConfig
-		} else if thinkingExplicitlyDisabled {
-			// 客户端明确禁用思考，但有工具 → 强制覆盖为最低档以保证工具调用稳定性
-			// 同时将 includeThoughts 保持 true，让流处理器能正确过滤 thought parts
-			if gcommon.IsGemini3Model(model) {
-				genConfig["thinkingConfig"] = map[string]interface{}{
-					"includeThoughts": true,
-					"thinkingLevel":   "LOW",
-				}
-				vertexReq["generationConfig"] = genConfig
-			}
+		// thinkingConfig 已在上方 switch 中统一设置（ALL 分支），无需工具兜底
+		// toolConfig 仅在有 tools 时设置，避免构造无效请求
+		if mappedToolChoice := mapToolChoice(req.ToolChoice); mappedToolChoice != nil {
+			vertexReq["toolConfig"] = mappedToolChoice
 		}
 	}
 
-	// Gemini 3.x maxOutputTokens 补偿：
+	// maxOutputTokens 补偿：
 	// Anthropic max_tokens 仅计响应文本，thinking 由 budget_tokens 单独控制；
 	// 而 Gemini 的 maxOutputTokens = thinking token + 响应 token 合并上限。
 	// 若不补充思考预算，Gemini 在思考阶段就耗尽配额，导致正文为空（MAX_TOKENS + no parts）。
 	// 策略：在 thinkingConfig 确定后，将对应 level 的估算开销叠加到 maxOutputTokens。
-	if gcommon.IsGemini3Model(model) && req.MaxTokens > 0 {
+	// 上限：Gemini 3.x 模型最大输出为 65536 token，不得超过此值。
+	const gemini3MaxOutputTokens = 65536
+	if req.MaxTokens > 0 {
 		if tc, ok := genConfig["thinkingConfig"].(map[string]interface{}); ok {
 			if includeThoughts, _ := tc["includeThoughts"].(bool); includeThoughts {
-				overhead := 8000 // MEDIUM 默认开销
+				overhead := 8000 // AUTO/MEDIUM 默认开销
 				switch tc["thinkingLevel"] {
 				case "HIGH":
 					// 客户端明确开启且有 budget_tokens 时，尊重客户端预算；否则用估算值
@@ -260,14 +215,22 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 				case "LOW":
 					overhead = 2000
 				}
-				genConfig["maxOutputTokens"] = req.MaxTokens + overhead
+				total := req.MaxTokens + overhead
+				if total > gemini3MaxOutputTokens {
+					total = gemini3MaxOutputTokens
+				}
+				genConfig["maxOutputTokens"] = total
 				vertexReq["generationConfig"] = genConfig
 			}
 		}
 	}
 
-	if mappedToolChoice := mapToolChoice(req.ToolChoice); mappedToolChoice != nil {
-		vertexReq["toolConfig"] = mappedToolChoice
+	// output_config 映射：将 Anthropic 结构化输出配置转换为 Gemini responseMimeType/responseSchema
+	// 当前仅处理 JSON 模式（output_config 在 Anthropic 2026 API 中主要用于约束输出格式）
+	if req.OutputConfig != nil {
+		// Anthropic output_config.effort 是 DeepSeek 兼容字段，Gemini 无对应，忽略
+		// 未来如果 Anthropic 增加 output_config.format = "json"，在此添加 responseMimeType 映射
+		_ = req.OutputConfig
 	}
 
 	// safetySettings：默认对所有类别设置 BLOCK_NONE，防止 Gemini 安全过滤器误杀代理流量

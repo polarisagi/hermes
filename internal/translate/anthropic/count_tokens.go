@@ -29,7 +29,9 @@ func HandleCountTokens(w http.ResponseWriter, bodyBytes []byte) {
 	if err != nil {
 		// EstimateTokens 不会失败到这里，保守处理
 		slog.Error("count_tokens 序列化失败", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"internal error"}}`))
 		return
 	}
 

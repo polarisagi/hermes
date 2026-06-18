@@ -254,6 +254,7 @@ func sanitizeSchema(schema map[string]interface{}) map[string]interface{} {
 	for k, v := range schema {
 		switch k {
 		case "$schema", "$ref", "$defs", "$id",
+			"title",                  // Gemini 函数声明 schema 不支持 title
 			"propertyNames", "exclusiveMinimum", "exclusiveMaximum",
 			"additionalProperties",
 			"unevaluatedProperties", "unevaluatedItems",

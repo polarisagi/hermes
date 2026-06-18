@@ -19,13 +19,17 @@ func handleAnthropicNonStreamResponse(w http.ResponseWriter, vertexResp *http.Re
 	defer vertexResp.Body.Close()
 	bodyBytes, err := io.ReadAll(vertexResp.Body)
 	if err != nil {
-		http.Error(w, "Failed to read response", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"Failed to read response"}}`))
 		return
 	}
 
 	var vResp map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &vResp); err != nil {
-		http.Error(w, "Invalid response from Vertex", http.StatusBadGateway)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"Invalid response from upstream"}}`))
 		return
 	}
 

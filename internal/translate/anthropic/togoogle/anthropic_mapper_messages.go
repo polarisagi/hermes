@@ -268,17 +268,19 @@ func enforceAlternatingRoles(contents []map[string]interface{}) []map[string]int
 
 	if len(contents) > 0 {
 		if contents[0]["role"] == "model" {
+			// 使用单个空格而非空字符串，避免 Gemini 对空 text part 返回空响应
 			contents = append([]map[string]interface{}{
-				{"role": "user", "parts": []map[string]interface{}{{"text": ""}}},
+				{"role": "user", "parts": []map[string]interface{}{{"text": " "}}},
 			}, contents...)
 		}
 	}
 
 	if len(contents) > 0 {
 		if contents[len(contents)-1]["role"] == "model" {
+			// 使用单个空格而非空字符串，避免 Gemini 对空 text part 返回空响应
 			contents = append(contents, map[string]interface{}{
 				"role":  "user",
-				"parts": []map[string]interface{}{{"text": ""}},
+				"parts": []map[string]interface{}{{"text": " "}},
 			})
 		}
 	}

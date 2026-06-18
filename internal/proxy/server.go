@@ -213,7 +213,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if contentEncoding == "gzip" {
 		gr, err := gzip.NewReader(r.Body)
 		if err != nil {
-			http.Error(w, "Failed to decompress gzip body", http.StatusBadRequest)
+			s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Failed to decompress gzip body")
 			return
 		}
 		defer gr.Close()
@@ -221,7 +221,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if contentEncoding == "zstd" {
 		zr, err := zstd.NewReader(r.Body)
 		if err != nil {
-			http.Error(w, "Failed to decompress zstd body", http.StatusBadRequest)
+			s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Failed to decompress zstd body")
 			return
 		}
 		defer zr.Close()
@@ -230,7 +230,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	bodyBytes, err := io.ReadAll(bodyReader)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
 	defer r.Body.Close()
@@ -259,7 +259,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &reqMap); err != nil {
-		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Invalid JSON payload")
 		return
 	}
 
@@ -269,7 +269,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			(clientProtocol == "openai" && detected == "anthropic") ||
 			(clientProtocol != "google" && detected == "google") {
 			slog.Warn("协议 Payload 不匹配", "client_protocol", clientProtocol, "detected_payload", detected)
-			http.Error(w, "Protocol Payload Mismatch: You connected to /v1/"+clientProtocol+"/ but sent a "+detected+" payload.", http.StatusBadRequest)
+			s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error",
+				"Protocol Payload Mismatch: You connected to /v1/"+clientProtocol+"/ but sent a "+detected+" payload.")
 			return
 		}
 	}
@@ -281,6 +282,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	maxRetries := 1 // Limit to 1 retry (2 attempts total) for faster failover
 	var lastErr error
+	var lastStatusCode int // 记录最后一次上游 HTTP 状态码，用于重试耗尽时决定错误类型
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Check if the client already cancelled the request before trying
@@ -361,7 +363,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Error("无兼容的后端协议端点", "channel", activeChan.Provider.Name, "client_protocol", clientProtocol)
 			s.chanManager.ReleaseChannel(activeChan)
 			skipBilling = true
-			http.Error(w, "No compatible backend protocol endpoint for channel", http.StatusBadGateway)
+			s.writeError(w, clientProtocol, http.StatusBadGateway, "api_error", "No compatible backend protocol endpoint for channel")
 			return
 		}
 
@@ -402,7 +404,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				slog.Error("ResponsesAPIToChatCompletions 失败", "error", errConv)
 				s.chanManager.ReleaseChannel(activeChan)
 				skipBilling = true
-				http.Error(w, "Invalid Responses API payload", http.StatusBadRequest)
+				s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Invalid Responses API payload")
 				return
 			}
 		}
@@ -412,7 +414,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Error("TranslateRequest 失败", "error", err)
 			s.chanManager.ReleaseChannel(activeChan)
 			skipBilling = true
-			http.Error(w, "Failed to translate request: "+err.Error(), http.StatusBadRequest)
+			s.writeError(w, clientProtocol, http.StatusBadRequest, "invalid_request_error", "Failed to translate request: "+err.Error())
 			return
 		}
 
@@ -439,7 +441,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.chanManager.ReleaseChannel(activeChan)
 			skipBilling = true
-			http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
+			s.writeError(w, clientProtocol, http.StatusInternalServerError, "api_error", "Failed to create proxy request")
 			return
 		}
 
@@ -457,7 +459,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Error("Auth 注入失败", "error", err)
 			s.chanManager.ReleaseChannel(activeChan)
 			skipBilling = true
-			http.Error(w, "Auth injection failed", http.StatusInternalServerError)
+			s.writeError(w, clientProtocol, http.StatusInternalServerError, "api_error", "Auth injection failed")
 			return
 		}
 
@@ -494,15 +496,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.chanManager.ReportError(activeChan, resp.StatusCode)
 			s.chanManager.ReleaseChannel(activeChan)
 			resp.Body.Close()
+			lastStatusCode = resp.StatusCode
 			lastErr = fmt.Errorf("upstream error: %s", resp.Status)
 			continue
 		}
 
-		// 4xx 错误不重试，读取错误体并记录，方便定位协议转换问题
+		// 4xx 错误不重试，转换为 Anthropic 错误格式后返回（不透传原始 Google JSON，客户端无法解析）
 		if resp.StatusCode >= 400 {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			// error_body 截断，避免泄露过多上游数据
 			errSnippet := string(errBody)
 			if len(errSnippet) > 500 {
 				errSnippet = errSnippet[:500] + "...(truncated)"
@@ -515,15 +517,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"model", actualModel,
 				"error_body", errSnippet,
 			)
-			// 仅在 debug 模式下输出完整请求体（含用户消息，注意 PII）
 			if logger.IsDebugEnabled() {
 				slog.Debug("4xx 上游请求体", "sent_payload", string(payloadBytes))
 			}
 			s.chanManager.ReportSuccess(activeChan)
 			s.chanManager.ReleaseChannel(activeChan)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write(errBody)
+			errType, errMsg := parseUpstreamErrorBody(errBody, resp.StatusCode)
+			s.writeError(w, clientProtocol, resp.StatusCode, errType, errMsg)
 			return
 		}
 		slog.Debug("上游响应正常", "status", resp.StatusCode, "provider", activeChan.Provider.ProviderID, "model", actualModel, "content_type", resp.Header.Get("Content-Type"))
@@ -568,19 +568,147 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Error("网关所有重试耗尽", "lastErr", lastErr)
+	slog.Error("网关所有重试耗尽", "lastErr", lastErr, "lastStatusCode", lastStatusCode)
 	skipBilling = true
-	s.writeError(w, clientProtocol, http.StatusBadGateway, "api_error",
-		fmt.Sprintf("All retries failed: %v", lastErr))
+	// 429 耗尽 → overloaded_error(529)：触发 Claude Code 指数退避重试，而非立即重试
+	// 其他情况 → api_error(502)
+	if lastStatusCode == http.StatusTooManyRequests {
+		s.writeError(w, clientProtocol, 529, "overloaded_error",
+			"Upstream rate limited, all retries exhausted. Please retry later.")
+	} else {
+		s.writeError(w, clientProtocol, http.StatusBadGateway, "api_error",
+			fmt.Sprintf("All retries failed: %v", lastErr))
+	}
 }
 
-// writeError 按客户端协议格式写入错误响应
+// writeError 按客户端协议写入符合各家 2026 标准的错误响应。
+// 三协议格式：
+//   - anthropic: {"type":"error","error":{"type":"...","message":"..."},"request_id":"req_..."}
+//   - openai:    {"error":{"message":"...","type":"...","param":null,"code":"..."}}
+//   - google:    {"error":{"code":N,"message":"...","status":"RESOURCE_EXHAUSTED"}}
 func (s *Server) writeError(w http.ResponseWriter, clientProtocol string, statusCode int, errType, message string) {
-	if clientProtocol == "anthropic" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(statusCode)
-		_, _ = fmt.Fprintf(w, `{"type":"error","error":{"type":"%s","message":"%s"}}`, errType, message)
-	} else {
-		http.Error(w, message, statusCode)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	var errPayload []byte
+	switch clientProtocol {
+	case "anthropic":
+		// https://docs.anthropic.com/en/api/errors
+		errPayload, _ = json.Marshal(map[string]interface{}{
+			"type": "error",
+			"error": map[string]interface{}{
+				"type":    errType,
+				"message": message,
+			},
+			"request_id": generateRequestID(),
+		})
+	case "openai":
+		// https://platform.openai.com/docs/guides/error-codes
+		errPayload, _ = json.Marshal(map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": message,
+				"type":    toOpenAIErrorType(errType),
+				"param":   nil,
+				"code":    toOpenAIErrorCode(errType, statusCode),
+			},
+		})
+	case "google":
+		// https://ai.google.dev/gemini-api/docs/troubleshooting
+		errPayload, _ = json.Marshal(map[string]interface{}{
+			"error": map[string]interface{}{
+				"code":    statusCode,
+				"message": message,
+				"status":  toGoogleErrorStatus(statusCode),
+			},
+		})
+	default:
+		errPayload = []byte(message)
 	}
+	_, _ = w.Write(errPayload)
+}
+
+// generateRequestID 生成类 Anthropic 格式的请求追踪 ID（仅用于日志，无需密码学随机性）
+func generateRequestID() string {
+	return fmt.Sprintf("req_%016x", time.Now().UnixNano())
+}
+
+// toOpenAIErrorType 将内部错误类型映射到 OpenAI type 字符串
+// 主要差异：Anthropic 的 api_error/overloaded_error → OpenAI 的 server_error
+func toOpenAIErrorType(errType string) string {
+	switch errType {
+	case "api_error", "overloaded_error":
+		return "server_error"
+	default:
+		// invalid_request_error, authentication_error, permission_error,
+		// rate_limit_error, not_found_error 与 OpenAI 格式相同
+		return errType
+	}
+}
+
+// toOpenAIErrorCode 生成 OpenAI code 字段（机器可读标识符，nil 表示通用错误）
+func toOpenAIErrorCode(errType string, statusCode int) interface{} {
+	switch {
+	case statusCode == http.StatusUnauthorized || errType == "authentication_error":
+		return "invalid_api_key"
+	case statusCode == http.StatusTooManyRequests || errType == "rate_limit_error" || errType == "overloaded_error":
+		return "rate_limit_exceeded"
+	case statusCode == http.StatusNotFound || errType == "not_found_error":
+		return "model_not_found"
+	default:
+		return nil
+	}
+}
+
+// toGoogleErrorStatus 将 HTTP 状态码映射到 Google API 标准 status 字符串
+func toGoogleErrorStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "INVALID_ARGUMENT"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusTooManyRequests, 529:
+		return "RESOURCE_EXHAUSTED"
+	case http.StatusInternalServerError:
+		return "INTERNAL"
+	case http.StatusNotImplemented:
+		return "UNIMPLEMENTED"
+	case http.StatusServiceUnavailable, http.StatusBadGateway:
+		return "UNAVAILABLE"
+	case http.StatusGatewayTimeout:
+		return "DEADLINE_EXCEEDED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// parseUpstreamErrorBody 从上游（Google/Gemini）原始错误体提取消息，并映射到内部错误类型。
+// Google 错误格式：{"error": {"code": 400, "message": "...", "status": "INVALID_ARGUMENT"}}
+func parseUpstreamErrorBody(body []byte, statusCode int) (errType, message string) {
+	var googleErr struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &googleErr); err == nil && googleErr.Error.Message != "" {
+		message = googleErr.Error.Message
+	} else {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 300 {
+			msg = msg[:300] + "..."
+		}
+		message = msg
+	}
+	switch statusCode {
+	case http.StatusBadRequest:
+		errType = "invalid_request_error"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		errType = "authentication_error"
+	case http.StatusNotFound:
+		errType = "not_found_error"
+	default:
+		errType = "api_error"
+	}
+	return
 }
