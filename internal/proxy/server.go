@@ -311,7 +311,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"last_err", lastErr,
 				)
 				skipBilling = true
-				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "overloaded_error",
+				// 429 → 但返回 529，让 Claude Code 走指数退避而非立即重试
+				// Claude Code 只认 529 触发 overloaded 退避，429 会走 0s 立即重试
+				s.writeError(w, clientProtocol, 529, "overloaded_error",
 					"Upstream rate limited and no alternative channel available. Please retry later.")
 				return
 			}

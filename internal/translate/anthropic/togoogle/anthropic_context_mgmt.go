@@ -24,12 +24,12 @@ func applyContextManagementEdits(messages []Message, cm *ContextManagement) []Me
 		switch edit.Type {
 		case "clear_thinking_20251015":
 			keepN := parseKeepN(edit.Keep, "thinking_turns", 1)
-			before := len(messages)
-			messages = clearOldThinkingBlocks(messages, keepN)
+			var clearedBlocks int
+			messages, clearedBlocks = clearOldThinkingBlocks(messages, keepN)
 			slog.Info("🧹 [ContextMgmt] clear_thinking 执行完毕",
 				"keep_n", keepN,
-				"msg_count_before", before,
-				"msg_count_after", len(messages),
+				"thinking_turns_total", len(messages),
+				"thinking_blocks_cleared", clearedBlocks,
 			)
 		case "clear_tool_uses_20250919":
 			keepN := parseKeepN(edit.Keep, "tool_uses", 3)
@@ -66,7 +66,8 @@ func parseKeepN(raw json.RawMessage, _ string, defaultN int) int {
 //
 // 策略：找出所有含 thinking 块的 assistant turn，保留最后 keepN 个，
 // 清理其余 turn 中的 thinking/redacted_thinking 内容块（保留 text/tool_use 等其他块）。
-func clearOldThinkingBlocks(messages []Message, keepN int) []Message {
+// 返回清理后的消息列表及实际清理的 thinking 块总数（用于日志）。
+func clearOldThinkingBlocks(messages []Message, keepN int) ([]Message, int) {
 	// 收集含 thinking 块的 assistant turn 下标
 	var thinkingIdxs []int
 	for i, msg := range messages {
@@ -87,7 +88,7 @@ func clearOldThinkingBlocks(messages []Message, keepN int) []Message {
 	}
 
 	if len(thinkingIdxs) <= keepN {
-		return messages // 未超限，无需清理
+		return messages, 0 // 未超限，无需清理
 	}
 
 	// 最旧的几个需要清理
@@ -98,6 +99,7 @@ func clearOldThinkingBlocks(messages []Message, keepN int) []Message {
 
 	result := make([]Message, len(messages))
 	copy(result, messages)
+	clearedBlocks := 0
 	for idx := range clearSet {
 		msg := result[idx]
 		arr, ok := msg.Content.([]interface{})
@@ -109,6 +111,7 @@ func clearOldThinkingBlocks(messages []Message, keepN int) []Message {
 			if m, ok := item.(map[string]interface{}); ok {
 				t, _ := m["type"].(string)
 				if t == "thinking" || t == "redacted_thinking" {
+					clearedBlocks++
 					continue // 清除
 				}
 			}
@@ -116,7 +119,7 @@ func clearOldThinkingBlocks(messages []Message, keepN int) []Message {
 		}
 		result[idx] = Message{Role: msg.Role, Content: filtered}
 	}
-	return result
+	return result, clearedBlocks
 }
 
 // clearOldToolResultContents 清理旧 tool_result 的返回内容，保留最后 keepN 个工具调用结果对。
