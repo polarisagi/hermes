@@ -590,6 +590,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //   - google:    {"error":{"code":N,"message":"...","status":"RESOURCE_EXHAUSTED"}}
 func (s *Server) writeError(w http.ResponseWriter, clientProtocol string, statusCode int, errType, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	// Retry-After：告知客户端等待多少秒再重试，优先于指数退避
+	// 429 rate_limit_error 建议等 10s，529 overloaded_error 建议等 15s
+	// Anthropic SDK/Claude Code 会读取此 header 作为 backoff 起点
+	switch statusCode {
+	case http.StatusTooManyRequests:
+		w.Header().Set("Retry-After", "10")
+	case 529:
+		w.Header().Set("Retry-After", "15")
+	}
 	w.WriteHeader(statusCode)
 
 	var errPayload []byte
