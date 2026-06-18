@@ -505,7 +505,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 4xx 错误不重试，转换为 Anthropic 错误格式后返回（不透传原始 Google JSON，客户端无法解析）
+		// 4xx 错误处理：
+		// - 配额类 4xx（Google 403 RESOURCE_EXHAUSTED / QUOTA_EXCEEDED）视为限流，进入重试+转 529 流程
+		// - 其余业务型 4xx（400/401/403 权限问题/404）直接返回，不重试
 		if resp.StatusCode >= 400 {
 			errBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -513,6 +515,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if len(errSnippet) > 500 {
 				errSnippet = errSnippet[:500] + "...(truncated)"
 			}
+
+			// 检测是否是上游配额/限流类 4xx（如 Google 403 RESOURCE_EXHAUSTED）
+			if isUpstreamQuotaError(resp.StatusCode, errBody) {
+				slog.Warn("上游返回配额类 4xx，按限流处理、进入重试",
+					"attempt", attempt,
+					"status", resp.StatusCode,
+					"provider", activeChan.Provider.ProviderID,
+					"account", activeChan.Provider.Name,
+					"error_body", errSnippet,
+				)
+				// 报告限流错误，触发 Cooldown（与 429 相同冷却时长）
+				s.chanManager.ReportError(activeChan, http.StatusTooManyRequests)
+				s.chanManager.ReleaseChannel(activeChan)
+				lastStatusCode = http.StatusTooManyRequests
+				sawRateLimit = true
+				lastErr = fmt.Errorf("upstream quota error (HTTP %d): %s", resp.StatusCode, errSnippet)
+				continue // 进入重试逻辑
+			}
+
 			slog.Warn("上游返回 4xx 错误",
 				"status", resp.StatusCode,
 				"provider", activeChan.Provider.ProviderID,
@@ -593,13 +614,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeError(w http.ResponseWriter, clientProtocol string, statusCode int, errType, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	// Retry-After：告知客户端等待多少秒再重试，优先于指数退避
-	// 429 rate_limit_error 建议等 10s，529 overloaded_error 建议等 15s
-	// Anthropic SDK/Claude Code 会读取此 header 作为 backoff 起点
+	// Anthropic SDK/Claude Code 会读取此 header 作为 backoff 起点。
+	// 与 pool/manager.go 的 Cooldown 时长对齐：
+	//   429 rate_limit_error → 网关冷却 60 秒，客户端等 30 秒后重试（网关有可能已切换到其他账号）
+	//   529 overloaded_error → 网关冷却 60 秒，客户端等 65 秒（覆盖冷却 + 5 秒缓冲）
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		w.Header().Set("Retry-After", "10")
+		w.Header().Set("Retry-After", "30")
 	case 529:
-		w.Header().Set("Retry-After", "15")
+		w.Header().Set("Retry-After", "65")
 	}
 	w.WriteHeader(statusCode)
 
@@ -739,4 +762,37 @@ func parseUpstreamErrorBody(body []byte, statusCode int) (errType, message strin
 		errType = "api_error"
 	}
 	return
+}
+
+// isUpstreamQuotaError 检测上游返回的 4xx 是否属于配额/限流类错误。
+// Google 在配额耗尽时可能返回 403，body 中 status 字段为 RESOURCE_EXHAUSTED 或 QUOTA_EXCEEDED。
+func isUpstreamQuotaError(statusCode int, body []byte) bool {
+	// 只针对 403（其他 4xx 不是配额错误）
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	// 解析 Google 错误体
+	var googleErr struct {
+		Error struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &googleErr); err == nil {
+		status := strings.ToUpper(googleErr.Error.Status)
+		if status == "RESOURCE_EXHAUSTED" || status == "QUOTA_EXCEEDED" {
+			return true
+		}
+		// 如果 status 字段为空，尝试从 message 中匹配关键词
+		msg := strings.ToUpper(googleErr.Error.Message)
+		if strings.Contains(msg, "QUOTA") || strings.Contains(msg, "RESOURCE_EXHAUSTED") ||
+			strings.Contains(msg, "RATE_LIMIT") || strings.Contains(msg, "TOO MANY REQUESTS") {
+			return true
+		}
+	}
+	// 如果 JSON 解析失败，对原始内容做关键词匹配安全网
+	bodyUpper := strings.ToUpper(string(body))
+	return strings.Contains(bodyUpper, "RESOURCE_EXHAUSTED") ||
+		strings.Contains(bodyUpper, "QUOTA_EXCEEDED") ||
+		strings.Contains(bodyUpper, "RATEQUOTAEXCEEDED")
 }

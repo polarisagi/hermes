@@ -298,19 +298,56 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, m
 			}
 		}
 
-		// 最后一个 chunk 携带 finish_reason
-		if finishReason != "" {
-			fr := finishReason
-			if len(sentToolCallStart) > 0 {
-				fr = "tool_calls"
+		// 提取 usageMetadata
+		var promptTokens, completionTokens, reasoningTokens int
+		hasUsage := false
+		if usage, ok := gChunk["usageMetadata"].(map[string]interface{}); ok {
+			hasUsage = true
+			if pt, ok := usage["promptTokenCount"].(float64); ok {
+				promptTokens = int(pt)
 			}
-			writeChunk(map[string]interface{}{
+			if ct, ok := usage["candidatesTokenCount"].(float64); ok {
+				completionTokens = int(ct)
+			}
+			if tt, ok := usage["thoughtsTokenCount"].(float64); ok {
+				reasoningTokens = int(tt)
+				completionTokens += reasoningTokens
+			}
+		}
+
+		// 最后一个 chunk 携带 finish_reason 或 usage
+		if finishReason != "" || hasUsage {
+			var fr interface{} = nil
+			if finishReason != "" {
+				fr = finishReason
+				if len(sentToolCallStart) > 0 {
+					fr = "tool_calls"
+				}
+			}
+
+			chunkResp := map[string]interface{}{
 				"id": chatID, "object": "chat.completion.chunk",
 				"created": created, "model": model,
-				"choices": []map[string]interface{}{
+				"choices": make([]map[string]interface{}, 0),
+			}
+			
+			if fr != nil {
+				chunkResp["choices"] = []map[string]interface{}{
 					{"index": 0, "delta": map[string]interface{}{}, "finish_reason": fr},
-				},
-			})
+				}
+			}
+			
+			if hasUsage {
+				chunkResp["usage"] = map[string]interface{}{
+					"prompt_tokens":     promptTokens,
+					"completion_tokens": completionTokens,
+					"total_tokens":      promptTokens + completionTokens,
+					"completion_tokens_details": map[string]interface{}{
+						"reasoning_tokens": reasoningTokens,
+					},
+				}
+			}
+			writeChunk(chunkResp)
 		}
 	}
 

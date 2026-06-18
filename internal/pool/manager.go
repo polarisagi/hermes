@@ -815,15 +815,27 @@ func (m *Manager) ReportError(ch *ActiveChannel, statusCode int) {
 	}
 
 	if statusCode == 429 || statusCode >= 500 {
-		cooldown := 10 * time.Second
-		if time.Now().Before(ch.CooldownUntil.Add(1 * time.Minute)) {
-			cooldown = 30 * time.Second
+		// 429: Google API 的配额窗口为 60 秒，首次冷却需覆盖完整窗口；
+		// 若短时间内连续触发（上次 Cooldown 还未过去超过 2 分钟），说明限流较严，升级到 2 分钟。
+		// 5xx: 服务端错误，10 秒冷却足够。
+		var cooldown time.Duration
+		if statusCode == 429 {
+			cooldown = 60 * time.Second
+			if time.Now().Before(ch.CooldownUntil.Add(2 * time.Minute)) {
+				cooldown = 120 * time.Second
+			}
+		} else {
+			cooldown = 10 * time.Second
+			if time.Now().Before(ch.CooldownUntil.Add(1 * time.Minute)) {
+				cooldown = 30 * time.Second
+			}
 		}
 		ch.Status = StatusCooldown
 		ch.CooldownUntil = time.Now().Add(cooldown)
 		slog.Warn("渠道遭遇限流或服务端错误，进入 Cooldown",
 			"channel", ch.Provider.Name,
 			"status_code", statusCode,
+			"cooldown", cooldown.String(),
 			"cooldown_until", ch.CooldownUntil.Format(time.RFC3339))
 	}
 }
@@ -839,7 +851,10 @@ func (m *Manager) cooldownManager() {
 			ch.mu.Lock()
 			if ch.Status == StatusCooldown && now.After(ch.CooldownUntil) {
 				ch.Status = StatusProbation
-				ch.LastAcquireTime = now
+				// 注意：不重置 LastAcquireTime。
+				// 若重置，MinIntervalSec 计时会从冷却结束点重新开始，
+				// 导致实际等待 = CooldownTime + MinIntervalSec，远超预期。
+				// 冷却期间时间本已流逝，间隔检查自然会通过。
 				slog.Info("渠道冷却结束，进入 Probation", "channel", ch.Provider.Name)
 				notified = true
 			}
