@@ -282,7 +282,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	maxRetries := 1 // Limit to 1 retry (2 attempts total) for faster failover
 	var lastErr error
-	var lastStatusCode int // 记录最后一次上游 HTTP 状态码，用于重试耗尽时决定错误类型
+	var lastStatusCode int // 记录最后一次上游 HTTP 状态码
+	var sawRateLimit bool  // 任意一次上游返回 429，优先用 overloaded_error 而非 api_error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Check if the client already cancelled the request before trying
@@ -311,9 +312,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"last_err", lastErr,
 				)
 				skipBilling = true
-				// 429 → 但返回 529，让 Claude Code 走指数退避而非立即重试
-				// Claude Code 只认 529 触发 overloaded 退避，429 会走 0s 立即重试
-				s.writeError(w, clientProtocol, 529, "overloaded_error",
+				s.writeOverloadedError(w, clientProtocol,
 					"Upstream rate limited and no alternative channel available. Please retry later.")
 				return
 			}
@@ -331,7 +330,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// 返回此错误说明已等待超时，无需在此层再次重试。
 			if errors.Is(routeErr, pool.ErrAllChannelsBusy) {
 				slog.Error("路由匹配失败 (所有可用渠道均繁忙/熔断/额度耗尽)", "requested_model", modelName, "error", routeErr)
-				s.writeError(w, clientProtocol, http.StatusTooManyRequests, "rate_limit_error",
+				s.writeOverloadedError(w, clientProtocol,
 					"All upstream channels are currently busy, cooling down, or exhausted. Please try again later.")
 			} else {
 				slog.Error("路由匹配失败 (无满足条件的可用模型/节点)", "requested_model", modelName, "error", routeErr)
@@ -499,6 +498,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.chanManager.ReleaseChannel(activeChan)
 			resp.Body.Close()
 			lastStatusCode = resp.StatusCode
+			if resp.StatusCode == http.StatusTooManyRequests {
+				sawRateLimit = true // 记录曾经出现过 429，防止后续 5xx 覆盖判断结果
+			}
 			lastErr = fmt.Errorf("upstream error: %s", resp.Status)
 			continue
 		}
@@ -570,12 +572,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Error("网关所有重试耗尽", "lastErr", lastErr, "lastStatusCode", lastStatusCode)
+	slog.Error("网关所有重试耗尽", "lastErr", lastErr, "lastStatusCode", lastStatusCode, "saw_rate_limit", sawRateLimit)
 	skipBilling = true
-	// 429 耗尽 → overloaded_error(529)：触发 Claude Code 指数退避重试，而非立即重试
-	// 其他情况 → api_error(502)
-	if lastStatusCode == http.StatusTooManyRequests {
-		s.writeError(w, clientProtocol, 529, "overloaded_error",
+	// 任意一次 429 或最终状态码 429 → overloaded：触发客户端指数退避重试
+	// sawRateLimit 防止 attempt=0 的 429 被 attempt=1 的 5xx 覆盖，导致误判为 api_error
+	if lastStatusCode == http.StatusTooManyRequests || sawRateLimit {
+		s.writeOverloadedError(w, clientProtocol,
 			"Upstream rate limited, all retries exhausted. Please retry later.")
 	} else {
 		s.writeError(w, clientProtocol, http.StatusBadGateway, "api_error",
@@ -636,6 +638,21 @@ func (s *Server) writeError(w http.ResponseWriter, clientProtocol string, status
 		errPayload = []byte(message)
 	}
 	_, _ = w.Write(errPayload)
+}
+
+// writeOverloadedError 按客户端协议写入"上游过载/限流"错误，各协议使用自己的正确状态码：
+//   - anthropic: 529 + overloaded_error  → Claude Code 指数退避
+//   - openai:    429 + rate_limit_error  → OpenAI SDK 指数退避
+//   - google:    429 + RESOURCE_EXHAUSTED → Google SDK 指数退避
+func (s *Server) writeOverloadedError(w http.ResponseWriter, clientProtocol, message string) {
+	switch clientProtocol {
+	case "anthropic":
+		s.writeError(w, clientProtocol, 529, "overloaded_error", message)
+	default:
+		// openai / google：429 + rate_limit_error
+		// Google format 会自动映射为 RESOURCE_EXHAUSTED（见 toGoogleErrorStatus）
+		s.writeError(w, clientProtocol, http.StatusTooManyRequests, "rate_limit_error", message)
+	}
 }
 
 // generateRequestID 生成类 Anthropic 格式的请求追踪 ID（仅用于日志，无需密码学随机性）
