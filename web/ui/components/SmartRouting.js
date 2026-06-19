@@ -247,14 +247,9 @@ export default {
 
             async saveRoute() {
                 const gStore = Alpine.store('global');
-                let reqModel = this.routeForm.requested_model_id;
-                if (this.sourceMode === 'tier') {
-                    reqModel = this.selectedTier;
-                } else if (this.sourceMode === 'wildcard') {
-                    reqModel = '*';
-                } else {
-                    reqModel = (reqModel || '').trim();
-                }
+                // Pro 模式弹窗使用自由文本输入，直接读取 routeForm.requested_model_id 即可，
+                // 不再依赖 sourceMode / selectedTier，避免用户输入被覆盖。
+                let reqModel = (this.routeForm.requested_model_id || '').trim();
 
                 if (!reqModel) {
                     gStore.showToast(gStore.t('err_empty_mapping') || '源模型不能为空', 'error');
@@ -597,13 +592,13 @@ export default {
                                     <span class="label-text-alt">
                                         <div class="flex gap-1">
                                             <button type="button"
-                                                    @click="routeForm.requested_model_id = '*'"
+                                                    @click="routeForm.requested_model_id = '*'; sourceMode = 'wildcard'; selectedTier = 'smart'"
                                                     class="badge badge-ghost badge-sm cursor-pointer hover:badge-warning font-mono transition-colors">* <span x-text="$store.global.t('all') || '通配符'"></span></button>
                                             <button type="button"
-                                                    @click="routeForm.requested_model_id = 'smart'"
+                                                    @click="routeForm.requested_model_id = 'smart'; sourceMode = 'tier'; selectedTier = 'smart'"
                                                     class="badge badge-warning badge-sm cursor-pointer hover:opacity-80 font-mono transition-colors">smart</button>
                                             <button type="button"
-                                                    @click="routeForm.requested_model_id = 'fast'"
+                                                    @click="routeForm.requested_model_id = 'fast'; sourceMode = 'tier'; selectedTier = 'fast'"
                                                     class="badge badge-info badge-sm cursor-pointer hover:opacity-80 font-mono transition-colors">fast</button>
                                         </div>
                                     </span>
