@@ -2,6 +2,7 @@ package toanthropic
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"github.com/polarisagi/hermes/internal/translate"
@@ -9,7 +10,7 @@ import (
 	"github.com/polarisagi/hermes/internal/translate/openai"
 )
 
-func buildAnthropicRequest(oReq map[string]interface{}, targetModel string) (*anthr.MessageRequest, error) {
+func buildAnthropicRequest(oReq map[string]interface{}, targetModel string, userID string) (*anthr.MessageRequest, error) {
 	aReq := &anthr.MessageRequest{}
 
 	// Model
@@ -60,6 +61,19 @@ func buildAnthropicRequest(oReq map[string]interface{}, targetModel string) (*an
 	}
 	if tc, ok := oReq["tool_choice"]; ok {
 		aReq.ToolChoice = convertToolChoice(tc)
+		// "none": 清除工具列表，阻止模型调用工具（Anthropic 无 "none" type，通过移除 tools 实现）
+		if aReq.ToolChoice == nil {
+			aReq.Tools = nil
+		}
+	}
+	// n > 1：记录警告，Anthropic 不支持多候选
+	if n, ok := oReq["n"].(float64); ok && n > 1 {
+		slog.Warn("[openai→anthropic] n > 1 not supported by Anthropic, using 1", "n", int(n))
+	}
+
+	// user → metadata.user_id 映射
+	if userID != "" {
+		aReq.Metadata = &anthr.RequestMetadata{UserID: userID}
 	}
 
 	// 思考模式配置（2026年 Anthropic API 标准）
@@ -193,6 +207,15 @@ func convertUserContent(content interface{}) interface{} {
 								},
 							})
 						}
+					} else if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+						blocks = append(blocks, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type":       "url",
+								"url":        url,
+								"media_type": "image/jpeg",
+							},
+						})
 					}
 				}
 			}

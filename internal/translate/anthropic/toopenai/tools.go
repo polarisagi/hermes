@@ -23,6 +23,12 @@ func convertToolChoice(tc *anthr.ToolChoice) interface{} {
 	if tc == nil {
 		return nil
 	}
+	if tc.DisableParallelToolUse {
+		return map[string]interface{}{
+			"type":                "auto",
+			"parallel_tool_calls": false,
+		}
+	}
 	switch tc.Type {
 	case "auto":
 		return "auto"

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/polarisagi/hermes/internal/translate"
 	gcommon "github.com/polarisagi/hermes/internal/translate/google"
 )
 
@@ -82,7 +83,7 @@ func mapThinkingConfig(genCfg map[string]interface{}, aReq map[string]interface{
 			return
 		}
 		aReq["thinking"] = map[string]interface{}{"type": "adaptive"}
-		aReq["effort"] = gcommon.ThinkingBudgetToEffort(int(budget))
+		aReq["effort"] = translate.MapEffortToAnthropic(gcommon.ThinkingBudgetToEffort(int(budget)))
 		return
 	}
 

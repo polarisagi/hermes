@@ -117,6 +117,14 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 	var model string
 	var inputTokens, outputTokens int
 	finishReason := ""
+	// 流式工具调用累积：Anthropic 发送 input_json_delta 增量，需拼接后完整发射
+	type toolAccum struct {
+		name     string
+		jsonBuf  string
+		index    int
+	}
+	var curTool *toolAccum
+	toolIndex := 0
 
 	for {
 		if r.Context().Err() != nil {
@@ -154,7 +162,6 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 			}
 
 		case "content_block_start":
-			idx, _ := event["index"].(float64)
 			blk, _ := event["content_block"].(map[string]interface{})
 			if blk == nil {
 				continue
@@ -162,17 +169,28 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 			blkType, _ := blk["type"].(string)
 			switch blkType {
 			case "thinking":
-				// 发送空思考开始 chunk
 				writeChunk(buildGeminiChunk(model, []map[string]interface{}{
 					{"thought": true, "text": ""},
 				}, ""))
 			case "tool_use":
-				name, _ := blk["name"].(string)
-				_ = idx
-				writeChunk(buildGeminiChunk(model, []map[string]interface{}{
-					{"functionCall": map[string]interface{}{"name": name, "args": map[string]interface{}{}}},
-				}, ""))
+				curTool = &toolAccum{
+					name: blk["name"].(string),
+					index: toolIndex,
+				}
+				toolIndex++
 			}
+
+		case "content_block_stop":
+			// 工具调用结束时发送累积的完整参数
+			if curTool != nil && curTool.jsonBuf != "" {
+				var args interface{}
+				if err := json.Unmarshal([]byte(curTool.jsonBuf), &args); err == nil {
+					writeChunk(buildGeminiChunk(model, []map[string]interface{}{
+						{"functionCall": map[string]interface{}{"name": curTool.name, "args": args}},
+					}, ""))
+				}
+			}
+			curTool = nil
 
 		case "content_block_delta":
 			delta, ok := event["delta"].(map[string]interface{})
@@ -197,7 +215,10 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response) {
 					{"thought": true, "text": "", "thoughtSignature": sig},
 				}, ""))
 			case "input_json_delta":
-				// 工具调用参数增量，Gemini 不支持增量 functionCall，跳过
+				partial, _ := delta["partial_json"].(string)
+				if curTool != nil {
+					curTool.jsonBuf += partial
+				}
 			}
 
 		case "message_delta":

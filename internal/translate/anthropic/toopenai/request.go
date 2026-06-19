@@ -43,6 +43,10 @@ func buildOpenAIRequest(aReq *anthr.MessageRequest, targetModel string, kind tra
 		oReq["stop"] = aReq.StopSequences
 	}
 
+	if aReq.Metadata != nil && aReq.Metadata.UserID != "" {
+		oReq["user"] = aReq.Metadata.UserID
+	}
+
 	mapThinkingParam(aReq, oReq, kind)
 
 	if len(aReq.Tools) > 0 {
@@ -208,9 +212,9 @@ func convertAssistantBlocks(blocks []interface{}) []map[string]interface{} {
 	}
 	if hasTools {
 		oMsg["tool_calls"] = toolCalls
-		if hasThinking {
-			oMsg["reasoning_content"] = strings.Join(thinkingParts, "\n")
-		}
+	}
+	if hasThinking {
+		oMsg["reasoning_content"] = strings.Join(thinkingParts, "\n")
 	}
 
 	return []map[string]interface{}{oMsg}

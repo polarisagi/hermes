@@ -26,7 +26,6 @@ var geapSafetySettings = []map[string]interface{}{
 	{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 	{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
 	{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-	{"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"},
 }
 
 // findLastCompactionIndex 返回 messages 中最后一个包含 compaction 块的消息下标，
@@ -51,7 +50,7 @@ func findLastCompactionIndex(messages []Message) int {
 // 优先读取 effort，没有时 fallback 到 budget_tokens 数值推断（向后兼容旧格式）
 func effortToThinkingLevel(effort string, budgetTokens int) string {
 	switch effort {
-	case "max", "ultra_code":
+	case "max", "ultra_code", "xhigh":
 		return "HIGH"
 	case "high":
 		return "HIGH"
@@ -60,7 +59,6 @@ func effortToThinkingLevel(effort string, budgetTokens int) string {
 	case "low":
 		return "LOW"
 	default:
-		// 没有 effort 字段，fallback 到旧的 budget_tokens 数值推断
 		return budgetToThinkingLevel(budgetTokens)
 	}
 }
@@ -168,14 +166,10 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 			"thinkingLevel":   "LOW",
 		}
 	default:
-		// 无 thinking 配置：优先尊重顶层 effort，没有则让模型自决（AUTO）
-		level := "AUTO"
-		if req.Effort != "" {
-			level = effortToThinkingLevel(req.Effort, 0)
-		}
+		// 无 thinking 配置：优先尊重顶层 effort，没有则默认 MEDIUM（与旧行为一致）
 		genConfig["thinkingConfig"] = map[string]interface{}{
 			"includeThoughts": true,
-			"thinkingLevel":   level,
+			"thinkingLevel":   effortToThinkingLevel(req.Effort, 0),
 		}
 	}
 	if len(genConfig) > 0 {
@@ -226,11 +220,15 @@ func mapToVertexRequest(req MessageRequest, model string) (map[string]interface{
 	}
 
 	// output_config 映射：将 Anthropic 结构化输出配置转换为 Gemini responseMimeType/responseSchema
-	// 当前仅处理 JSON 模式（output_config 在 Anthropic 2026 API 中主要用于约束输出格式）
 	if req.OutputConfig != nil {
-		// Anthropic output_config.effort 是 DeepSeek 兼容字段，Gemini 无对应，忽略
-		// 未来如果 Anthropic 增加 output_config.format = "json"，在此添加 responseMimeType 映射
-		_ = req.OutputConfig
+		switch req.OutputConfig.Format {
+		case "json":
+			genConfig["responseMimeType"] = "application/json"
+			if req.OutputConfig.Schema != nil {
+				genConfig["responseSchema"] = req.OutputConfig.Schema
+			}
+			vertexReq["generationConfig"] = genConfig
+		}
 	}
 
 	// safetySettings：默认对所有类别设置 BLOCK_NONE，防止 Gemini 安全过滤器误杀代理流量

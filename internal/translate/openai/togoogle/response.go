@@ -100,7 +100,9 @@ func handleNonStream(w http.ResponseWriter, resp *http.Response, model string) {
 		if len(textParts) == 0 {
 			msg["content"] = nil
 		}
-		finishReason = "tool_calls"
+		if finishReason == "stop" {
+			finishReason = "tool_calls"
+		}
 	}
 
 	oResp := map[string]interface{}{
@@ -154,7 +156,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, m
 
 	// 流式工具调用累积（Gemini 流式中工具调用可能分多个 chunk）
 	toolCallIndex := 0
-	sentToolCallStart := make(map[string]bool) // name → 是否已发出首个 chunk
+	activeToolCallIDs := make(map[int]string) // index → ID（保持稳定性）
 
 	for {
 		if r.Context().Err() != nil {
@@ -242,10 +244,10 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, m
 				args := fc["args"]
 				argsBytes, _ := json.Marshal(args)
 
-				tcID := fmt.Sprintf("call_%s_%d", name, time.Now().UnixNano())
+				if _, exists := activeToolCallIDs[toolCallIndex]; !exists {
+					tcID := fmt.Sprintf("call_%s_%d_%d", name, toolCallIndex, created)
+					activeToolCallIDs[toolCallIndex] = tcID
 
-				if !sentToolCallStart[name] {
-					// 首次：发出包含 id 和 name 的 chunk
 					writeChunk(map[string]interface{}{
 						"id": chatID, "object": "chat.completion.chunk",
 						"created": created, "model": model,
@@ -270,10 +272,8 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, m
 							},
 						},
 					})
-					sentToolCallStart[name] = true
 				}
 
-				// 发出 arguments 增量
 				writeChunk(map[string]interface{}{
 					"id": chatID, "object": "chat.completion.chunk",
 					"created": created, "model": model,
@@ -320,7 +320,7 @@ func handleStream(w http.ResponseWriter, r *http.Request, resp *http.Response, m
 			var fr interface{} = nil
 			if finishReason != "" {
 				fr = finishReason
-				if len(sentToolCallStart) > 0 {
+				if fr == "stop" && len(activeToolCallIDs) > 0 {
 					fr = "tool_calls"
 				}
 			}

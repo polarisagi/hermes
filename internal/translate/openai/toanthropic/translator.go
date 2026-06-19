@@ -38,12 +38,16 @@ func (t *OpenAIToAnthropicTranslator) TranslateRequest(
 		return nil, "", fmt.Errorf("invalid OpenAI JSON payload: %w", err)
 	}
 
-	// 移除 user 字段，防止每次请求生成唯一的会话 ID 破坏前端或代理层的缓存
+	// 提取 user 字段，映射到 Anthropic metadata.user_id
+	var userID string
+	if u, ok := oReq["user"].(string); ok {
+		userID = u
+	}
 	delete(oReq, "user")
 
 	// 2. 转换为 Anthropic 格式
 	// body 已由 proxy.Server 统一预转换为 Chat Completions 格式（Responses API 已在上游处理）
-	aReq, err := buildAnthropicRequest(oReq, targetModel)
+	aReq, err := buildAnthropicRequest(oReq, targetModel, userID)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to convert to Anthropic format: %w", err)
 	}

@@ -61,9 +61,11 @@ type ToolChoice struct {
 	DisableParallelToolUse bool   `json:"disable_parallel_tool_use,omitempty"`
 }
 
-// OutputConfig 输出行为控制（DeepSeek Anthropic 接口专用）
+// OutputConfig 输出行为控制（Anthropic 2026 API + DeepSeek Anthropic 接口）
 type OutputConfig struct {
-	Effort string `json:"effort,omitempty"`
+	Effort string                 `json:"effort,omitempty"`
+	Format string                 `json:"format,omitempty"`
+	Schema map[string]interface{} `json:"schema,omitempty"`
 }
 
 type RequestMetadata struct {

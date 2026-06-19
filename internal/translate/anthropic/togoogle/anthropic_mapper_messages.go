@@ -78,8 +78,25 @@ func mapMessages(messages []Message, model string) ([]map[string]interface{}, er
 						// lastSignature 参数已废弃（thinking 块现在内联转换为 thought part），传空字符串
 						parsedParts := parseToolUseBlock(m, model, "", flattenedTools)
 						parts = append(parts, parsedParts...)
-					case "tool_result":
-						parts = append(parts, parseToolResultBlock(m, toolMap, flattenedTools)...)
+				case "tool_result":
+					parts = append(parts, parseToolResultBlock(m, toolMap, flattenedTools)...)
+				case "server_tool_use":
+					toolUseID, _ := m["id"].(string)
+					name, _ := m["name"].(string)
+					parts = append(parts, map[string]interface{}{
+						"functionCall": map[string]interface{}{
+							"name": name,
+							"args": m["input"],
+						},
+						"thoughtSignature": skipThoughtSigValidator,
+					})
+					if toolUseID != "" && name != "" {
+						toolMap[toolUseID] = name
+					}
+				case "search_result":
+					if content := buildSearchResultText(m); content != "" {
+						parts = append(parts, map[string]interface{}{"text": content})
+					}
 					}
 				}
 			}
@@ -285,4 +302,28 @@ func enforceAlternatingRoles(contents []map[string]interface{}) []map[string]int
 		}
 	}
 	return contents
+}
+
+// buildSearchResultText 将 Anthropic search_result 块转换为文本表示。
+// Anthropic 2026 API 的 web_search 结果以 content block 形式返回历史。
+func buildSearchResultText(m map[string]interface{}) string {
+	results, _ := m["results"].([]interface{})
+	if len(results) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, r := range results {
+		result, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		title, _ := result["title"].(string)
+		url, _ := result["url"].(string)
+		snippet, _ := result["snippet"].(string)
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("[%s](%s): %s", title, url, snippet))
+	}
+	return sb.String()
 }

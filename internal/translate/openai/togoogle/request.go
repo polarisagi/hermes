@@ -361,7 +361,30 @@ func buildGenerationConfig(oReq map[string]interface{}) map[string]interface{} {
 	if maxCT, ok := oReq["max_completion_tokens"].(float64); ok && maxCT > 0 {
 		gConfig["maxOutputTokens"] = int(maxCT)
 	}
-	if stops, ok := oReq["stop"].([]interface{}); ok && len(stops) > 0 {
+	if seed, ok := oReq["seed"].(float64); ok {
+		gConfig["seed"] = int(seed)
+	}
+	if fp, ok := oReq["frequency_penalty"].(float64); ok {
+		gConfig["frequencyPenalty"] = fp
+	}
+	if pp, ok := oReq["presence_penalty"].(float64); ok {
+		gConfig["presencePenalty"] = pp
+	}
+	if logprobs, ok := oReq["logprobs"].(bool); ok && logprobs {
+		gConfig["responseLogprobs"] = true
+	}
+	if topLogprobs, ok := oReq["top_logprobs"].(float64); ok {
+		gConfig["logprobs"] = int(topLogprobs)
+	}
+	if n, ok := oReq["n"].(float64); ok && n > 0 {
+		gConfig["candidateCount"] = int(n)
+	}
+	switch stops := oReq["stop"].(type) {
+	case string:
+		if stops != "" {
+			gConfig["stopSequences"] = []string{stops}
+		}
+	case []interface{}:
 		var stopSeqs []string
 		for _, s := range stops {
 			if str, ok := s.(string); ok {
